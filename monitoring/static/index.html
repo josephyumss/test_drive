@@ -1,0 +1,182 @@
+<link rel="stylesheet" href="/styles.css">
+<main class="dashboard" aria-labelledby="page-title">
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">GUIDE AMR · SAFETY MONITOR</p>
+      <h1 id="page-title">통합 안전 관제</h1>
+    </div>
+    <div class="live-indicator" id="live-indicator" aria-live="polite">
+      <span class="live-dot" aria-hidden="true"></span>
+      <span id="live-label">데이터 연결 중</span>
+    </div>
+  </header>
+
+  <section class="state-hero state-init" id="state-hero" aria-live="polite">
+    <div>
+      <p class="section-label">현재 안전 상태</p>
+      <h2 id="system-state">INIT</h2>
+      <p id="state-reason">관제 데이터 대기 중</p>
+    </div>
+    <div class="hero-speed">
+      <span>실제 속도</span>
+      <strong><span id="actual-speed">0.00</span><small>m/s</small></strong>
+    </div>
+  </section>
+
+  <section class="connection-strip" aria-label="장치 연결 상태">
+    <div class="connection-item" data-device="jetson">
+      <span class="status-dot"></span><span>Jetson</span><strong>확인 중</strong>
+    </div>
+    <div class="connection-item" data-device="stm32">
+      <span class="status-dot"></span><span>STM32</span><strong>확인 중</strong>
+    </div>
+    <div class="connection-item" data-device="lidar">
+      <span class="status-dot"></span><span>LiDAR</span><strong>확인 중</strong>
+    </div>
+    <div class="connection-item" data-device="camera">
+      <span class="status-dot"></span><span>RGB-D</span><strong>확인 중</strong>
+    </div>
+  </section>
+
+  <section class="grid metrics-grid">
+    <article class="panel velocity-panel">
+      <div class="panel-heading">
+        <div>
+          <p class="section-label">DRIVE</p>
+          <h3>주행 속도</h3>
+        </div>
+        <span class="metric-chip" id="angular-speed">0.00 rad/s</span>
+      </div>
+      <div class="speed-row">
+        <div>
+          <span>목표</span>
+          <strong id="target-speed">0.00</strong><small>m/s</small>
+        </div>
+        <div>
+          <span>실제</span>
+          <strong id="metric-actual-speed">0.00</strong><small>m/s</small>
+        </div>
+      </div>
+      <div class="wheel-group">
+        <div class="wheel-line">
+          <span>좌측 모터</span>
+          <div class="track"><i id="left-speed-bar"></i></div>
+          <strong id="left-speed">0.00</strong>
+        </div>
+        <div class="wheel-line">
+          <span>우측 모터</span>
+          <div class="track"><i id="right-speed-bar"></i></div>
+          <strong id="right-speed">0.00</strong>
+        </div>
+      </div>
+    </article>
+
+    <article class="panel obstacle-panel">
+      <div class="panel-heading">
+        <div>
+          <p class="section-label">PERCEPTION</p>
+          <h3>전방 장애물</h3>
+        </div>
+        <span class="metric-chip" id="obstacle-status">미감지</span>
+      </div>
+      <div class="obstacle-reading">
+        <div>
+          <span>거리</span>
+          <strong id="obstacle-distance">—</strong><small>m</small>
+        </div>
+        <div>
+          <span>TTC</span>
+          <strong id="obstacle-ttc">—</strong><small>s</small>
+        </div>
+      </div>
+      <div class="object-detail">
+        <div><span>종류</span><strong id="object-class">없음</strong></div>
+        <div><span>방향</span><strong id="object-direction">전방</strong></div>
+      </div>
+    </article>
+
+    <article class="panel safety-panel">
+      <div class="panel-heading">
+        <div>
+          <p class="section-label">GROUND SAFETY</p>
+          <h3>낙차 감지</h3>
+        </div>
+        <span class="metric-chip" id="cliff-summary">정상</span>
+      </div>
+      <div class="sensor-pair">
+        <div class="sensor-cell" id="cliff-left-cell">
+          <span>좌측 Cliff</span>
+          <strong id="cliff-left">정상</strong>
+          <small id="cliff-left-distance">—</small>
+        </div>
+        <div class="sensor-cell" id="cliff-right-cell">
+          <span>우측 Cliff</span>
+          <strong id="cliff-right">정상</strong>
+          <small id="cliff-right-distance">—</small>
+        </div>
+      </div>
+      <div class="tof-line">
+        <span>하향 ToF</span><strong id="tof-state">정상</strong>
+      </div>
+    </article>
+
+    <article class="panel battery-panel">
+      <div class="panel-heading">
+        <div>
+          <p class="section-label">POWER</p>
+          <h3>배터리</h3>
+        </div>
+        <span class="metric-chip" id="battery-voltage">— V</span>
+      </div>
+      <div class="battery-reading">
+        <div class="battery-shell" aria-hidden="true">
+          <i id="battery-fill"></i>
+        </div>
+        <strong><span id="battery-percent">—</span><small>%</small></strong>
+      </div>
+      <p id="battery-message">배터리 데이터 대기 중</p>
+    </article>
+  </section>
+
+  <section class="grid lower-grid">
+    <article class="panel diagnostics-panel">
+      <div class="panel-heading">
+        <div>
+          <p class="section-label">DIAGNOSTICS</p>
+          <h3>시스템 진단</h3>
+        </div>
+      </div>
+      <dl class="diagnostic-list">
+        <div><dt>프로토콜</dt><dd id="protocol-version">v1</dd></div>
+        <div><dt>모터 오류</dt><dd id="motor-error">0</dd></div>
+        <div><dt>수신 오류</dt><dd id="rx-errors">0</dd></div>
+        <div><dt>마지막 명령</dt><dd id="last-command">0</dd></div>
+        <div><dt>가동 시간</dt><dd id="uptime">00:00:00</dd></div>
+        <div><dt>최근 정지 원인</dt><dd id="stop-reason">없음</dd></div>
+      </dl>
+      <div class="flag-area">
+        <span>활성 안전 플래그</span>
+        <div id="safety-flags"><span class="flag flag-clear">없음</span></div>
+      </div>
+    </article>
+
+    <article class="panel event-panel">
+      <div class="panel-heading">
+        <div>
+          <p class="section-label">EVENT HISTORY</p>
+          <h3>최근 이벤트</h3>
+        </div>
+        <span class="metric-chip" id="event-count">0건</span>
+      </div>
+      <ol class="event-list" id="event-list">
+        <li class="event-empty">수신된 이벤트가 없습니다.</li>
+      </ol>
+    </article>
+  </section>
+
+  <footer>
+    <span>마지막 데이터 <strong id="last-update">—</strong></span>
+    <span>읽기 전용 관제 · 모터 직접 제어 없음</span>
+  </footer>
+</main>
+<script src="/app.js"></script>

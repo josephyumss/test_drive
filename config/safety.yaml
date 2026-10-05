@@ -1,0 +1,24 @@
+speed:
+  maximum_mps: 0.50
+  slow_mps: 0.25
+  maximum_angular_rad_s: 0.80
+  slow_angular_rad_s: 0.40
+  allow_reverse: false
+
+obstacle:
+  slow_distance_m: 2.00
+  stop_distance_m: 1.20
+  emergency_distance_m: 0.80
+  slow_ttc_s: 4.00
+  stop_ttc_s: 2.00
+  emergency_ttc_s: 1.00
+
+communication:
+  heartbeat_period_ms: 100
+  drive_command_period_ms: 50
+  status_period_ms: 100
+  warning_timeout_ms: 200
+  stop_timeout_ms: 300
+
+restart:
+  manual_restart_required: true

@@ -1,0 +1,23 @@
+range_fusion_node:
+  ros__parameters:
+    publish_rate_hz: 20.0
+    sensor_timeout_s: 0.35
+    lidar_front_half_angle_deg: 25.0
+
+camera_path_node:
+  ros__parameters:
+    image_topic: /oak/rgb/image_raw
+    output_topic: /camera/path_error
+    roi_top_ratio: 0.55
+    minimum_line_length_px: 45
+
+path_guidance_node:
+  ros__parameters:
+    enabled: false
+    cruise_speed_mps: 0.25
+    maximum_angular_rad_s: 0.55
+    camera_gain: 0.55
+    lidar_center_gain: 0.75
+    lidar_heading_gain: 0.60
+    encoder_gain: 0.50
+    command_timeout_s: 0.4

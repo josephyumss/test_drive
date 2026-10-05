@@ -1,0 +1,4 @@
+dummy_sensor_node:
+  ros__parameters:
+    scenario: automatic
+    publish_rate_hz: 20.0

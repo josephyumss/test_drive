@@ -1,0 +1,37 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# ROS2 / colcon
+jetson_ws/build/
+jetson_ws/install/
+jetson_ws/log/
+
+# Build products and logs
+*.o
+*.elf
+*.hex
+*.bin
+*.map
+*.log
+logs/
+.run/
+config/runtime.env
+rosbag2_*/
+*.db3
+*.mcap
+
+# Local hardware settings and large models
+config/local.yaml
+models/*.pt
+models/*.onnx
+models/*.engine
+
+# IDE settings
+.idea/
+.vscode/
+*.user
+*.suo

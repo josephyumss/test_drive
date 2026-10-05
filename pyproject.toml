@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "guide-amr-core"
+version = "0.1.0"
+description = "Hardware-independent safety, protocol, simulation and monitoring core for Guide AMR"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+serial = ["pyserial>=3.5"]
+
+[tool.setuptools.packages.find]
+include = ["jetson*", "monitoring*", "protocol*", "simulation*"]
+
+[tool.setuptools.package-data]
+monitoring = ["static/*.html", "static/*.css", "static/*.js"]

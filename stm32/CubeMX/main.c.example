@@ -1,0 +1,45 @@
+/*
+ * This is an integration example, not a replacement for CubeMX-generated
+ * main.c. Copy only the marked calls into USER CODE blocks of the real file.
+ */
+/* USER CODE BEGIN Includes */
+#include "app_integration.h"
+/* USER CODE END Includes */
+/*
+ * Keep HAL_Init(), SystemClock_Config(), and all MX_*_Init() calls generated
+ * by CubeMX. At the end of USER CODE BEGIN 2, add:
+ */
+static void UserApplication_Init(void)
+{
+    AppIntegration_Init();
+}
+/* Replace the electronic bench-test body of while (1) with this call. */
+static void UserApplication_Loop(void)
+{
+    AppIntegration_Process();
+}
+/* The real main function should have this shape:
+ *
+ * int main(void)
+ * {
+ *     HAL_Init();
+ *     SystemClock_Config();
+ *     MX_GPIO_Init();
+ *     MX_TIM1_Init();
+ *     MX_TIM2_Init();
+ *     MX_TIM3_Init();
+ *     MX_TIM6_Init();
+ *     MX_USART1_UART_Init();
+ *
+ *     AppIntegration_Init();
+ *
+ *     while (1) {
+ *         AppIntegration_Process();
+ *     }
+ * }
+ */
+/* Add the safe-stop call before disabling interrupts in Error_Handler(). */
+static void UserApplication_ErrorStop(void)
+{
+    AppIntegration_ForceSafeStop();
+}

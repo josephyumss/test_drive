@@ -1,0 +1,3 @@
+# The core and dummy-test helpers use only the Python standard library.
+# ROS2 dependencies are supplied by the selected ROS2 distribution.
+# Optional real UART support: pyserial>=3.5

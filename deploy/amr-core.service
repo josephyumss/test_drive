@@ -1,0 +1,17 @@
+[Unit]
+Description=Kookmin Robotics Guide AMR
+After=network-online.target graphical.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kookminrobotics
+WorkingDirectory=/home/kookminrobotics/guide-amr
+Environment=OPEN_GUI=0
+ExecStart=/home/kookminrobotics/guide-amr/scripts/start_amr.sh
+ExecStop=/home/kookminrobotics/guide-amr/scripts/stop_amr.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,9 @@
+audio_node:
+  ros__parameters:
+    enabled: true
+    tts_command: espeak-ng
+    voice: ko
+    output_device: "plughw:CARD=UACDemoV10,DEV=0"
+    speed_wpm: 145
+    repeat_interval_s: 4.0
+    obstacle_announce_distance_m: 2.0

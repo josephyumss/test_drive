@@ -1,0 +1,17 @@
+mcu_bridge_node:
+  ros__parameters:
+    port: /dev/ttyTHS1
+    baudrate: 115200
+    command_rate_hz: 10.0
+    status_timeout_s: 0.35
+    velocity_input_timeout_s: 0.25
+    safety_input_timeout_s: 0.35
+    maximum_speed_mps: 0.03
+    wheel_diameter_m: 0.20
+    wheel_base_m: 0.50
+    maximum_wheel_rpm: 3
+    left_trim_rpm: 0
+    right_trim_rpm: 0
+    left_scale: 1.0
+    right_scale: 1.0
+    switch_mode: hold

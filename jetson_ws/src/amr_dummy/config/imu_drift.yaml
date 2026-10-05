@@ -1,0 +1,4 @@
+dummy_sensor_node:
+  ros__parameters:
+    scenario: imu_drift
+    publish_rate_hz: 100.0

@@ -1,0 +1,4 @@
+dummy_sensor_node:
+  ros__parameters:
+    scenario: wheel_slip
+    publish_rate_hz: 50.0
