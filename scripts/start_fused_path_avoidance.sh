@@ -103,7 +103,22 @@ YOLO_BRIDGE_PID=$!
 echo "[WAIT] LiDAR와 YOLO 준비 대기(최대 약 90초)"
 LIDAR_READY=0
 YOLO_READY=0
-for _ in $(seq 1 30); do
+for attempt in $(seq 1 30); do
+    if ! kill -0 "$LIDAR_PID" 2>/dev/null; then
+        echo "[FAIL] LiDAR 프로세스가 준비 중 종료됐습니다."
+        tail -n 40 "$LOG_DIR/fused_path_lidar.log" || true
+        exit 1
+    fi
+    if ! kill -0 "$YOLO_PID" 2>/dev/null; then
+        echo "[FAIL] YOLO Docker가 준비 중 종료됐습니다."
+        tail -n 40 "$LOG_DIR/fused_path_yolo.log" || true
+        exit 1
+    fi
+    if ! kill -0 "$YOLO_BRIDGE_PID" 2>/dev/null; then
+        echo "[FAIL] YOLO ROS 브리지가 준비 중 종료됐습니다."
+        tail -n 40 "$LOG_DIR/fused_path_yolo_bridge.log" || true
+        exit 1
+    fi
     if [[ "$LIDAR_READY" == "0" ]] \
         && timeout 2 ros2 topic echo /scan --once >/dev/null 2>&1; then
         LIDAR_READY=1
@@ -116,6 +131,9 @@ for _ in $(seq 1 30); do
     fi
     if [[ "$LIDAR_READY" == "1" && "$YOLO_READY" == "1" ]]; then
         break
+    fi
+    if (( attempt % 5 == 0 )); then
+        echo "[WAIT] /yolo/detections 수신 대기 중... ($((attempt * 3))/90초)"
     fi
     sleep 1
 done
