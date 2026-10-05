@@ -19,6 +19,7 @@ jetson_ws/log/
 *.log
 logs/
 .run/
+.runtime/
 config/runtime.env
 rosbag2_*/
 *.db3

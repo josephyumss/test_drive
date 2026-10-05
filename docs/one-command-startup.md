@@ -1,5 +1,71 @@
 # Jetson 원클릭 실행
 
+## YOLO + LiDAR only: one avoidance run
+
+The separate launcher `scripts/start_yolo_lidar_path_avoidance.sh` uses the
+OAK-D YOLO detections and STL-27L LiDAR for obstacle sensing. It does not import
+Jetson.GPIO, poll ultrasonic sensors, or use SHARP readings. STM32 wheel RPM
+feedback and emergency status are still required for odometry and motor control.
+The original `start_fused_path_avoidance.sh` is unchanged.
+
+On an Ubuntu 22.04 / JetPack 6 Jetson, install and build its dependencies:
+
+```bash
+./scripts/setup_yolo_lidar_path_avoidance.sh
+```
+
+Authenticate with sudo in the local terminal when requested. Setup installs ROS
+2 Humble, pyserial and build tools, builds `amr_interfaces` and `amr_vision`,
+builds the official STL-27L driver, downloads YOLO11n, and builds the existing
+JetPack YOLO Docker image. It does not send motor commands. Driver sources and
+builds default to `.runtime/ldlidar_ros2_ws`; an existing
+`~/ldlidar_ros2_ws/install/setup.bash` or explicit `LIDAR_WS` is also supported.
+
+Check the installation, then start the run:
+
+```bash
+./scripts/start_yolo_lidar_path_avoidance.sh --check
+./scripts/start_yolo_lidar_path_avoidance.sh
+```
+
+Movement starts automatically after fresh YOLO, LiDAR, and full MCU status
+messages arrive. The sequence is forward, stop for a confirmed fused obstacle,
+follow a side path, pass the obstacle, return to the original path, drive
+straight for two seconds, and stop all owned processes. The two-second segment
+uses a monotonic clock with a control-cycle scheduling tolerance. A new obstacle
+in that final segment ends the run with a stop. Obstacles without a YOLO match
+do not initiate a normal avoidance; the independent LiDAR near-field stop still
+applies.
+
+Missing or stale data, a LiDAR hard stop, emergency status, stalled wheel
+feedback, or a timeout abort the run. Defaults are 90 seconds for startup,
+180 seconds for the run, 20 seconds for entry, and 40 seconds for return.
+Vehicle dimensions, camera/LiDAR alignment and motion tuning retain the values
+from the original controller in `scripts/test_yolo_lidar_path_avoidance.py`.
+
+Optional overrides:
+
+```bash
+MCU_DEVICE=/dev/ttyTHS1 LIDAR_DEVICE=/dev/ttyUSB0 \
+  STARTUP_TIMEOUT_S=90 MAX_RUNTIME_S=180 \
+  ./scripts/start_yolo_lidar_path_avoidance.sh
+```
+
+`--preflight-only` starts the sensors and checks live MCU telemetry while
+commanding only zero RPM, then exits. The controller preserves a reported MCU
+emergency latch. The supplied ASCII firmware can latch its watchdog after
+commands end; a later run reports this rather than automatically clearing it.
+Resolve the emergency state on the MCU before retrying.
+
+Use Ctrl+C to stop an active launcher. When launched in the background, send
+SIGTERM to the PID recorded in `.run/yolo_lidar_path.pid`. Logs are
+`logs/runtime/yolo_lidar_controller.log`, `yolo_lidar_lidar.log`,
+`yolo_lidar_bridge.log`, and `yolo_lidar_yolo.log`. Exit code zero indicates a
+completed run (or successful check); nonzero indicates an abort or setup error.
+
+Setup follows the [official ROS apt bootstrap](https://github.com/ros2/ros2_documentation/blob/humble/source/Installation/_Apt-Repositories.rst)
+and uses the [official LDROBOT driver](https://github.com/ldrobotSensorTeam/ldlidar_stl_ros2).
+
 ## 1. 최초 한 번
 
 ```bash
