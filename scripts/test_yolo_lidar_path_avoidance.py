@@ -118,6 +118,7 @@ NO_PROGRESS_TIMEOUT_S = 10.0
 WAIT_CLEAR_TIMEOUT_S = 15.0
 MAXIMUM_RETURN_PATH_S = 40.0
 CONTROL_PERIOD_S = 0.02
+OPEN_LOOP_ARM_S = 1.0
 
 
 class YoloLidarAvoidance(Node):
@@ -137,22 +138,28 @@ class YoloLidarAvoidance(Node):
         self,
         *,
         port: str = PORT,
+        status_port: str | None = None,
         baudrate: int = BAUDRATE,
         startup_timeout_s: float = STARTUP_TIMEOUT_S,
         max_runtime_s: float = MAXIMUM_RUNTIME_S,
         no_progress_timeout_s: float = NO_PROGRESS_TIMEOUT_S,
         preflight_only: bool = False,
+        clear_startup_emergency: bool = False,
+        open_loop: bool = False,
     ) -> None:
         if not all(math.isfinite(value) and value > 0 for value in
                    (startup_timeout_s, max_runtime_s, no_progress_timeout_s)):
             raise ValueError("Timeouts must be finite and positive")
         super().__init__("yolo_lidar_path_avoidance")
         self.serial = None
+        self.status_serial = None
         self.rx_buffer = bytearray()
         self.startup_timeout_s = startup_timeout_s
         self.max_runtime_s = max_runtime_s
         self.no_progress_timeout_s = no_progress_timeout_s
         self.preflight_only = preflight_only
+        self.clear_startup_emergency = clear_startup_emergency
+        self.open_loop = open_loop
         self.created_s = time.monotonic()
         self.ready_started_s: float | None = None
         self.maneuver_started = False
@@ -188,9 +195,10 @@ class YoloLidarAvoidance(Node):
 
         self.stamps: dict[str, float | None] = {
             "camera": None,
-            "stm32": None,
             "lidar": None,
         }
+        if not self.open_loop:
+            self.stamps["stm32"] = None
         self.detections: list[dict] = []
         self.labels: list[str] = []
         self.lidar_points: list[tuple[float, float]] = []
@@ -232,7 +240,20 @@ class YoloLidarAvoidance(Node):
                                     write_timeout=0.2, exclusive=True)
         try:
             self.serial.reset_input_buffer()
+            if status_port is not None and status_port != port:
+                self.status_serial = serial.Serial(
+                    status_port,
+                    baudrate,
+                    timeout=0.01,
+                    write_timeout=0.2,
+                    exclusive=True,
+                )
+                self.status_serial.reset_input_buffer()
+            else:
+                self.status_serial = self.serial
         except Exception:
+            if self.status_serial is not None and self.status_serial is not self.serial:
+                self.status_serial.close()
             self.serial.close()
             raise
 
@@ -331,12 +352,13 @@ class YoloLidarAvoidance(Node):
             self.stamps["lidar"] = time.monotonic()
 
     def read_stm32(self) -> None:
-        waiting = min(self.serial.in_waiting, 4096)
+        waiting = min(self.status_serial.in_waiting, 4096)
         if waiting:
-            self.rx_buffer.extend(self.serial.read(waiting))
+            self.rx_buffer.extend(self.status_serial.read(waiting))
         if len(self.rx_buffer) > 8192:
             self.rx_buffer.clear()
-            self.stamps["stm32"] = None
+            if not self.open_loop:
+                self.stamps["stm32"] = None
             return
         while b"\n" in self.rx_buffer:
             raw, _, remainder = self.rx_buffer.partition(b"\n")
@@ -357,14 +379,24 @@ class YoloLidarAvoidance(Node):
                         or emergency not in (0, 1)):
                     raise ValueError("Invalid telemetry")
             except ValueError:
-                self.stamps["stm32"] = None
+                if not self.open_loop:
+                    self.stamps["stm32"] = None
                 continue
             self.left_wheel_rpm = left_rpm
             self.right_wheel_rpm = right_rpm
-            # A reported emergency stays latched for this invocation.
-            self.stm32_emergency = self.stm32_emergency or bool(emergency)
+            # The firmware command watchdog latches emergency after 500 ms
+            # without commands. The launcher explicitly permits clearing that
+            # state with a zero-RPM command during startup only. Once driving
+            # starts, any emergency remains latched for this invocation.
+            if self.state == self.WAIT_SENSORS and (
+                self.clear_startup_emergency or self.open_loop
+            ):
+                self.stm32_emergency = bool(emergency)
+            else:
+                self.stm32_emergency = self.stm32_emergency or bool(emergency)
             self.telemetry_seen = True
-            self.stamps["stm32"] = time.monotonic()
+            if not self.open_loop:
+                self.stamps["stm32"] = time.monotonic()
 
     def fresh(self, name: str, now: float) -> bool:
         stamp = self.stamps[name]
@@ -376,7 +408,9 @@ class YoloLidarAvoidance(Node):
     def update_odometry(self, now: float) -> None:
         dt = now - self.last_odometry_s
         self.last_odometry_s = now
-        if self.fresh("stm32", now):
+        if self.open_loop:
+            self.odometry.update(*self.last_command, dt)
+        elif self.fresh("stm32", now):
             self.odometry.update(self.left_wheel_rpm, self.right_wheel_rpm, dt)
 
     def update_fused_objects(self) -> None:
@@ -737,11 +771,22 @@ class YoloLidarAvoidance(Node):
     def check_health(self, now: float) -> None:
         if self.finished:
             return
-        if self.stm32_emergency:
+        if self.stm32_emergency and not (
+            self.state == self.WAIT_SENSORS
+            and (self.clear_startup_emergency or self.open_loop)
+        ):
             self.abort("STM32 emergency input is active", now)
             return
         if self.state == self.WAIT_SENSORS:
             if self.all_sensors_fresh(now):
+                if self.open_loop and now - self.created_s < OPEN_LOOP_ARM_S:
+                    # Keep sending zero commands long enough to clear the
+                    # STM32 watchdog before allowing any motion command.
+                    return
+                if self.stm32_emergency and self.clear_startup_emergency:
+                    # tick() will send $CMD,0,0,0; wait for a following
+                    # telemetry frame to confirm that the watchdog cleared.
+                    return
                 self.ready_started_s = now
                 self.last_odometry_s = now
                 self.last_progress_s = now
@@ -776,12 +821,18 @@ class YoloLidarAvoidance(Node):
         # E=0 clears the firmware's emergency latch. Do not send it before
         # reading a valid emergency field. Its existing command watchdog
         # stops old commands while startup waits for telemetry.
-        if not self.telemetry_seen:
+        if not self.telemetry_seen and not self.open_loop:
             if not self.finished and not self.closed:
                 return
             left, right = 0, 0
             self.stm32_emergency = True
-        emergency = int(self.stm32_emergency)
+        if self.state == self.WAIT_SENSORS and (
+            self.clear_startup_emergency or self.open_loop
+        ):
+            # Clear only the firmware watchdog latch, while commanding zero.
+            left, right, emergency = 0, 0, 0
+        else:
+            emergency = int(self.stm32_emergency)
         self.serial.write(f"$CMD,{left},{right},{emergency}\r\n".encode("ascii"))
         self.last_command = (left, right)
 
@@ -836,6 +887,8 @@ class YoloLidarAvoidance(Node):
                 time.sleep(0.02)
         finally:
             self.serial.close()
+            if self.status_serial is not self.serial:
+                self.status_serial.close()
 
 
 # Keep the familiar import name for tooling using the original test node.
@@ -845,12 +898,27 @@ IntegratedAvoidance = YoloLidarAvoidance
 def parse_arguments(arguments=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", default=PORT)
+    parser.add_argument(
+        "--status-port",
+        default=None,
+        help="Optional separate UART receiving STM32 $STATUS telemetry",
+    )
     parser.add_argument("--baudrate", type=int, default=BAUDRATE)
     parser.add_argument("--startup-timeout", type=float, default=STARTUP_TIMEOUT_S)
     parser.add_argument("--max-runtime", type=float, default=MAXIMUM_RUNTIME_S)
     parser.add_argument("--no-progress-timeout", type=float, default=NO_PROGRESS_TIMEOUT_S)
     parser.add_argument("--preflight-only", action="store_true",
                         help="Check fresh sensors/telemetry while sending only zero motor commands")
+    parser.add_argument(
+        "--clear-startup-emergency",
+        action="store_true",
+        help="Clear the STM32 command-watchdog latch using zero RPM during startup",
+    )
+    parser.add_argument(
+        "--open-loop",
+        action="store_true",
+        help="Use commanded RPM for odometry when STM32 status wiring is unavailable",
+    )
     args, ros_args = parser.parse_known_args(arguments)
     for name in ("startup_timeout", "max_runtime", "no_progress_timeout"):
         value = getattr(args, name)
@@ -875,11 +943,13 @@ def main(arguments=None) -> int:
     previous_sigterm = signal.signal(signal.SIGTERM, stop_signal)
     try:
         node = YoloLidarAvoidance(
-            port=args.port, baudrate=args.baudrate,
+            port=args.port, status_port=args.status_port, baudrate=args.baudrate,
             startup_timeout_s=args.startup_timeout,
             max_runtime_s=args.max_runtime,
             no_progress_timeout_s=args.no_progress_timeout,
             preflight_only=args.preflight_only,
+            clear_startup_emergency=args.clear_startup_emergency,
+            open_loop=args.open_loop,
         )
         print("YOLO + LiDAR one-shot avoidance; stop with Ctrl+C.", flush=True)
         while rclpy.ok() and not interrupted and not node.finished:

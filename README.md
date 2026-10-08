@@ -1,3 +1,22 @@
+SETUP 1
+
+cd /home/hyoripyu/Projects/test_drive
+./scripts/setup_yolo_lidar_path_avoidance.sh
+
+
+SETUP 2 (with STM32, LiDAR, OAK-D connected)
+
+cd /home/hyoripyu/Projects/test_drive
+sudo ./scripts/start_yolo_lidar_path_avoidance.sh --preflight-only
+
+
+ACTUAL RUN
+
+cd /home/hyoripyu/Projects/test_drive
+sudo env MCU_OPEN_LOOP=1 MAX_RUNTIME_S=60 ./scripts/start_yolo_lidar_path_avoidance.sh
+
++
+
 # 위험 감지·촉각 전달 통합형 시각장애인 보행 유도 AMR
 
 > AI·로봇 안전제어 솔루션 챌린지 1기  

@@ -85,6 +85,22 @@ def main() -> None:
     parser.add_argument("--rate", type=float, default=15.0)
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=384)
+    parser.add_argument(
+        "--device",
+        default="cpu",
+        help="Ultralytics inference device. Use cpu for the reliable Jetson fallback or 0 for CUDA.",
+    )
+    parser.add_argument(
+        "--imgsz",
+        type=int,
+        default=320,
+        help="Inference image size; result boxes remain in original camera coordinates.",
+    )
+    parser.add_argument(
+        "--half",
+        action="store_true",
+        help="Use FP16 inference (CUDA only).",
+    )
     parser.add_argument("--web-port", type=int, default=8081)
     args = parser.parse_args()
 
@@ -98,7 +114,11 @@ def main() -> None:
 
     with dai.Device(build_pipeline(args.width, args.height)) as device:
         queue = device.getOutputQueue("rgb", maxSize=1, blocking=False)
-        print(f"OAK-D + YOLO started; UDP destination={args.host}:{args.port}")
+        print(
+            f"OAK-D + YOLO started; UDP destination={args.host}:{args.port}; "
+            f"device={args.device}; imgsz={args.imgsz}; half={args.half}",
+            flush=True,
+        )
         while True:
             packet = queue.get()
             now = time.monotonic()
@@ -106,9 +126,15 @@ def main() -> None:
                 continue
             last_inference = now
             frame = packet.getCvFrame()
-            result = model.predict(
-                frame, conf=args.confidence, device="0", verbose=False
-            )[0]
+            predict_args = {
+                "conf": args.confidence,
+                "device": args.device,
+                "imgsz": args.imgsz,
+                "verbose": False,
+            }
+            if args.half:
+                predict_args["half"] = True
+            result = model.predict(frame, **predict_args)[0]
             detections = []
             if result.boxes is not None:
                 for box in result.boxes:

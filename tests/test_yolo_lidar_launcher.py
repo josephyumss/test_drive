@@ -183,6 +183,7 @@ class YoloLidarLauncherTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout)
         arguments = next(event for event in events if event.startswith("CONTROLLER_ARGS"))
         self.assertIn("--preflight-only", arguments)
+        self.assertIn("--open-loop", arguments)
         self.assert_all_started_sensors_stopped(events)
 
     def test_check_does_not_start_any_runtime_component(self):

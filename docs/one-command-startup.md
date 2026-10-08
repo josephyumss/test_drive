@@ -51,11 +51,27 @@ MCU_DEVICE=/dev/ttyTHS1 LIDAR_DEVICE=/dev/ttyUSB0 \
   ./scripts/start_yolo_lidar_path_avoidance.sh
 ```
 
+The active ASCII STM32 firmware receives commands on USART1 and sends status
+on USART3. On this robot the launcher uses `/dev/ttyTHS1` for commands and, when
+present, `/dev/ttyTHS2` for status. Override the latter with
+`MCU_STATUS_DEVICE` if the Jetson wiring differs. YOLO defaults to CPU inference
+at image size 320 because the current JetPack 6 CUDA allocator fails during the
+640-pixel model warmup. `YOLO_DEVICE=0 YOLO_HALF=1` opts back into CUDA after
+that runtime is repaired.
+
+This robot currently does not return `$STATUS` on either Jetson UART. Therefore
+the YOLO/LiDAR launcher defaults to `MCU_OPEN_LOOP=1`: it requires fresh camera
+and LiDAR data, sends commands on `/dev/ttyTHS1`, and integrates commanded RPM
+for path odometry. It sends zero RPM for at least one second before moving. Set
+`MCU_OPEN_LOOP=0` after the USART3 status wire is connected; closed-loop mode
+then requires live wheel RPM and emergency telemetry before movement.
+
 `--preflight-only` starts the sensors and checks live MCU telemetry while
-commanding only zero RPM, then exits. The controller preserves a reported MCU
-emergency latch. The supplied ASCII firmware can latch its watchdog after
-commands end; a later run reports this rather than automatically clearing it.
-Resolve the emergency state on the MCU before retrying.
+commanding only zero RPM, then exits. The supplied ASCII firmware latches its
+command watchdog after 500 ms without commands. During startup only, the
+launcher clears that watchdog latch with `$CMD,0,0,0` and waits for a new status
+confirming it cleared. An emergency reported after driving begins remains
+latched and immediately stops the run.
 
 Use Ctrl+C to stop an active launcher. When launched in the background, send
 SIGTERM to the PID recorded in `.run/yolo_lidar_path.pid`. Logs are

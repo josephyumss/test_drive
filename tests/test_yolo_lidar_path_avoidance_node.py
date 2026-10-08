@@ -339,6 +339,46 @@ class YoloLidarPathAvoidanceNodeTests(unittest.TestCase):
         self.assertTrue(self.node.stm32_emergency)
         self.assertEqual(self.node.motor_command(self.now), (0, 0))
 
+    def test_explicit_startup_watchdog_clear_uses_zero_rpm_then_becomes_ready(self):
+        node = self.module.YoloLidarAvoidance(clear_startup_emergency=True)
+        self.addCleanup(node.shutdown)
+        node.on_scan(self.scan())
+        node.on_yolo(self.yolo_message([]))
+        node.serial.incoming.extend(
+            b"$STATUS,0,unavailable,unavailable,0,0,0,0,0,0,1\r\n"
+        )
+        node.tick()
+        self.assertEqual(node.state, node.WAIT_SENSORS)
+        self.assertEqual(node.serial.writes[-1], b"$CMD,0,0,0\r\n")
+        node.serial.incoming.extend(
+            b"$STATUS,0,unavailable,unavailable,0,0,0,0,0,0,0\r\n"
+        )
+        node.tick()
+        self.assertEqual(node.state, node.DRIVE)
+        self.assertFalse(node.stm32_emergency)
+        self.assertEqual(node.serial.writes[-1], b"$CMD,20,20,0\r\n")
+
+    def test_open_loop_requires_only_yolo_lidar_and_integrates_commanded_rpm(self):
+        node = self.module.YoloLidarAvoidance(open_loop=True)
+        self.addCleanup(node.shutdown)
+        node.on_scan(self.scan())
+        node.on_yolo(self.yolo_message([]))
+        node.tick()
+        self.assertEqual(node.state, node.WAIT_SENSORS)
+        self.assertEqual(node.serial.writes[-1], b"$CMD,0,0,0\r\n")
+        self.assertNotIn("stm32", node.stamps)
+        self.now += self.module.OPEN_LOOP_ARM_S + 0.01
+        node.on_scan(self.scan())
+        node.on_yolo(self.yolo_message([]))
+        node.tick()
+        self.assertEqual(node.state, node.DRIVE)
+        self.assertEqual(node.serial.writes[-1], b"$CMD,20,20,0\r\n")
+        self.now += 0.1
+        node.on_scan(self.scan())
+        node.on_yolo(self.yolo_message([]))
+        node.tick()
+        self.assertGreater(node.odometry.distance_travelled_m, 0.0)
+
     def test_emergency_stays_latched_and_is_preserved_in_stop_command(self):
         self.start_driving()
         self.status(emergency=1)
@@ -369,6 +409,26 @@ class YoloLidarPathAvoidanceNodeTests(unittest.TestCase):
         self.assertEqual(self.node.left_wheel_rpm, 12.0)
         self.assertEqual(self.node.right_wheel_rpm, 13.0)
         self.assertEqual(self.node.stamps["stm32"], self.now)
+
+    def test_separate_status_uart_receives_telemetry_and_command_uart_only_writes(self):
+        node = self.module.YoloLidarAvoidance(
+            port="/dev/command-uart", status_port="/dev/status-uart"
+        )
+        self.addCleanup(node.shutdown)
+        self.assertIsNot(node.serial, node.status_serial)
+        node.status_serial.incoming.extend(
+            b"$STATUS,0,unavailable,unavailable,0,0,12,13,0,0,0\r\n"
+        )
+        node.read_stm32()
+        self.assertEqual(node.left_wheel_rpm, 12.0)
+        self.assertEqual(node.right_wheel_rpm, 13.0)
+        self.assertEqual(node.stamps["stm32"], self.now)
+        node.send_command(0, 0)
+        self.assertEqual(node.serial.writes[-1], b"$CMD,0,0,0\r\n")
+        self.assertEqual(node.status_serial.writes, [])
+        node.shutdown()
+        self.assertTrue(node.serial.closed)
+        self.assertTrue(node.status_serial.closed)
 
     def test_scan_zero_to_360_normalizes_front_and_right_sectors(self):
         self.node.on_scan(self.scan(start_deg=0, overrides={359: 0.8, 315: 0.4, 45: 1.2}))

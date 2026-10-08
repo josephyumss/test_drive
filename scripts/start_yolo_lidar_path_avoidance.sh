@@ -17,7 +17,15 @@ fi
 LIDAR_SETUP="${LIDAR_SETUP:-$LIDAR_WS/install/setup.bash}"
 LIDAR_DEVICE="${LIDAR_DEVICE:-/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0}"
 MCU_DEVICE="${MCU_DEVICE:-/dev/ttyTHS1}"
+default_mcu_status_device="$MCU_DEVICE"
+# The active ASCII firmware receives $CMD on STM32 USART1 and transmits
+# $STATUS on STM32 USART3. The robot wiring maps the second channel to THS2.
+if [[ "$MCU_DEVICE" == /dev/ttyTHS1 && -e /dev/ttyTHS2 ]]; then
+    default_mcu_status_device=/dev/ttyTHS2
+fi
+MCU_STATUS_DEVICE="${MCU_STATUS_DEVICE:-$default_mcu_status_device}"
 MCU_BAUDRATE="${MCU_BAUDRATE:-115200}"
+MCU_OPEN_LOOP="${MCU_OPEN_LOOP:-1}"
 STARTUP_TIMEOUT_S="${STARTUP_TIMEOUT_S:-90}"
 MAX_RUNTIME_S="${MAX_RUNTIME_S:-180}"
 LOG_DIR="$PROJECT_DIR/logs/runtime"
@@ -44,6 +52,9 @@ require_path "$ROS_SETUP" 'ROS 2 setup'
 require_path "$JETSON_SETUP" 'AMR ROS workspace'
 require_path "$LIDAR_SETUP" 'LiDAR ROS workspace'
 require_path "$MCU_DEVICE" 'STM32 UART'
+if [[ "$MCU_OPEN_LOOP" != "1" ]]; then
+    require_path "$MCU_STATUS_DEVICE" 'STM32 status UART'
+fi
 require_path "$LIDAR_DEVICE" 'LiDAR serial device'
 require_path /dev/bus/usb 'camera USB access'
 for program in docker setsid flock fuser; do
@@ -66,6 +77,8 @@ if (( EUID != 0 )) && { [[ ! -r "$MCU_DEVICE" || ! -w "$MCU_DEVICE" || ! -r "$LI
     fi
     exec sudo env ROS_SETUP="$ROS_SETUP" LIDAR_SETUP="$LIDAR_SETUP" \
         LIDAR_DEVICE="$LIDAR_DEVICE" MCU_DEVICE="$MCU_DEVICE" MCU_BAUDRATE="$MCU_BAUDRATE" \
+        MCU_STATUS_DEVICE="$MCU_STATUS_DEVICE" \
+        MCU_OPEN_LOOP="$MCU_OPEN_LOOP" \
         STARTUP_TIMEOUT_S="$STARTUP_TIMEOUT_S" MAX_RUNTIME_S="$MAX_RUNTIME_S" \
         ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}" ROS_LOCALHOST_ONLY="${ROS_LOCALHOST_ONLY:-0}" \
         /bin/bash "$0" "$MODE"
@@ -85,12 +98,22 @@ ros2 pkg prefix amr_vision >/dev/null
 docker image inspect socialguide-amr-oak-yolo:jp6 >/dev/null
 docker info --format '{{json .Runtimes}}' | /usr/bin/python3 -c 'import json,sys; assert "nvidia" in json.load(sys.stdin), "NVIDIA Docker runtime missing"'
 echo '[ OK ] Runtime dependencies and device paths are present.'
+echo "[INFO] STM32 command UART: $MCU_DEVICE"
+if [[ "$MCU_OPEN_LOOP" == "1" ]]; then
+    echo '[INFO] STM32 status UART:  unavailable; command-RPM odometry enabled'
+else
+    echo "[INFO] STM32 status UART:  $MCU_STATUS_DEVICE"
+fi
 [[ "$MODE" != --check ]] || exit 0
 
 mkdir -p "$PROJECT_DIR/.run" "$LOG_DIR"
 exec 9>"$PROJECT_DIR/.run/yolo_lidar_path.lock"
 flock -n 9 || { echo '[FAIL] A YOLO/LiDAR run is already active.' >&2; exit 1; }
-for device in "$MCU_DEVICE" "$LIDAR_DEVICE"; do
+devices=("$MCU_DEVICE" "$LIDAR_DEVICE")
+if [[ "$MCU_OPEN_LOOP" != "1" && "$MCU_STATUS_DEVICE" != "$MCU_DEVICE" ]]; then
+    devices+=("$MCU_STATUS_DEVICE")
+fi
+for device in "${devices[@]}"; do
     if fuser "$device" >/dev/null 2>&1; then
         echo "[FAIL] Another process owns $device. Stop its current controller first." >&2
         exit 1
@@ -186,7 +209,13 @@ setsid "$PROJECT_DIR/scripts/start_yolo_docker.sh" \
 sensor_pids+=("$!")
 yolo_started=1
 
-args=(--port "$MCU_DEVICE" --baudrate "$MCU_BAUDRATE" --startup-timeout "$STARTUP_TIMEOUT_S" --max-runtime "$MAX_RUNTIME_S")
+args=(--port "$MCU_DEVICE" --baudrate "$MCU_BAUDRATE" \
+    --startup-timeout "$STARTUP_TIMEOUT_S" --max-runtime "$MAX_RUNTIME_S")
+if [[ "$MCU_OPEN_LOOP" == "1" ]]; then
+    args+=(--open-loop)
+else
+    args+=(--status-port "$MCU_STATUS_DEVICE" --clear-startup-emergency)
+fi
 if [[ "$MODE" == --preflight-only ]]; then
     args+=(--preflight-only)
     echo '[CHECK] Waiting for live YOLO, LiDAR and STM32 data; zero RPM only.'
