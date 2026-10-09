@@ -1,0 +1,13 @@
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+  File "/usr/lib/python3/dist-packages/Jetson/GPIO/__init__.py", line 1, in <module>
+    from .gpio import *
+  File "/usr/lib/python3/dist-packages/Jetson/GPIO/gpio.py", line 69, in <module>
+    model, JETSON_INFO, _channel_data_by_mode = gpio_pin_data.get_data()
+  File "/usr/lib/python3/dist-packages/Jetson/GPIO/gpio_pin_data.py", line 609, in get_data
+    model = get_model()
+  File "/usr/lib/python3/dist-packages/Jetson/GPIO/gpio_pin_data.py", line 602, in get_model
+    raise Exception('Could not determine Jetson model')
+Exception: Could not determine Jetson model
+Requirement already satisfied: Jetson.GPIO in /usr/lib/python3/dist-packages (2.1.7)
+WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv

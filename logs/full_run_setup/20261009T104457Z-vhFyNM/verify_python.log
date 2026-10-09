@@ -1,0 +1,42 @@
+[OK] serial version=3.5 file=/usr/lib/python3/dist-packages/serial/__init__.py
+[OK] numpy version=1.21.5 file=/usr/lib/python3/dist-packages/numpy/__init__.py
+[OK] yaml version=5.4.1 file=/usr/lib/python3/dist-packages/yaml/__init__.py
+[OK] cv2 version=4.5.4 file=/usr/lib/python3/dist-packages/cv2.cpython-310-aarch64-linux-gnu.so
+[ERROR] Import failed: Jetson.GPIO
+Traceback (most recent call last):
+  File "<stdin>", line 7, in <module>
+  File "/usr/lib/python3.10/importlib/__init__.py", line 126, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+  File "<frozen importlib._bootstrap>", line 1050, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1027, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1006, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 688, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 883, in exec_module
+  File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+  File "/usr/lib/python3/dist-packages/Jetson/GPIO/__init__.py", line 1, in <module>
+    from .gpio import *
+  File "/usr/lib/python3/dist-packages/Jetson/GPIO/gpio.py", line 69, in <module>
+    model, JETSON_INFO, _channel_data_by_mode = gpio_pin_data.get_data()
+  File "/usr/lib/python3/dist-packages/Jetson/GPIO/gpio_pin_data.py", line 609, in get_data
+    model = get_model()
+  File "/usr/lib/python3/dist-packages/Jetson/GPIO/gpio_pin_data.py", line 602, in get_model
+    raise Exception('Could not determine Jetson model')
+Exception: Could not determine Jetson model
+[SUMMARY] Failed imports: ['Jetson.GPIO']
+[ERROR] step=verify_python exit=1 file=/home/hyoripyu/Projects/test_drive/scripts/full_run_setup_steps.sh line=208 command="$PYTHON_BIN" - <<'PY'
+import importlib
+import sys
+import traceback
+failed = []
+for name in ("serial", "numpy", "yaml", "cv2", "Jetson.GPIO"):
+    try:
+        module = importlib.import_module(name)
+        print(f"[OK] {name} version={getattr(module, '__version__', 'unknown')} file={getattr(module, '__file__', 'unknown')}", flush=True)
+    except Exception:
+        failed.append(name)
+        print(f"[ERROR] Import failed: {name}", flush=True)
+        traceback.print_exc()
+print(f"[SUMMARY] Failed imports: {failed}", flush=True)
+sys.exit(bool(failed))
+PY
+
