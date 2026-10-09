@@ -4,6 +4,8 @@ import math
 import unittest
 
 from jetson.amr_core.full_run import FullRunConfig, FullRunController, ControlStatus, SideReading
+from jetson.amr_core.full_run_legacy import LegacyControlAdapter
+from jetson.amr_core.reactive_avoidance import WheelOdometry
 
 
 def ray_rectangle(origin, direction, rectangle):
@@ -21,21 +23,34 @@ def ray_rectangle(origin, direction, rectangle):
 
 
 class FullRunSceneTests(unittest.TestCase):
-    def run_scene(self, rectangle):
+    def run_scene(self, rectangle, protocol="ctrl", pause_entry=False):
         config = FullRunConfig()
         now = 100.0
-        core = FullRunController(config, 456, now)
+        core = FullRunController(config, 456, now, mcu_protocol=protocol)
+        legacy = LegacyControlAdapter(456) if protocol == "legacy" else None
+        truth = WheelOdometry(wheel_diameter_m=config.wheel_diameter_m, wheel_base_m=config.wheel_base_m)
         counts = [0.0, 0.0]
         up = 0
         phases = []
         returned = False
+        pause_index = None
+        pause_follower = None
         for index in range(18000):
             now += .02
+            truth.update(*core.command, .02)
             for wheel in (0, 1):
                 counts[wheel] += core.command[wheel] * config.encoder_counts_per_output_rev / 60 * .02
-            core.update_status(ControlStatus(456, 15 if up else 0, up, 0, 0, 0, 0,
-                                             *core.command, int(index*20), int(counts[0]), int(counts[1])), now)
-            pose = core.odom
+            if legacy:
+                if index % 5 == 0:  # Old firmware reports integer RPM at 10 Hz.
+                    base = 15 if up else 0
+                    if pause_index is not None:
+                        base = 0 if index - pause_index < 100 else 5
+                    wheels = core.command
+                    core.update_status(legacy.decode(f"$STATUS,{base},1234,45,0,0,{wheels[0]},{wheels[1]},0,0,0", now), now)
+            else:
+                core.update_status(ControlStatus(456, 15 if up else 0, up, 0, 0, 0, 0,
+                                                 *core.command, int(index*20), int(counts[0]), int(counts[1])), now)
+            pose = truth
             origin = (pose.x_m, pose.y_m)
             points, frontal = [], []
             for degree in range(-180, 180):
@@ -74,8 +89,13 @@ class FullRunSceneTests(unittest.TestCase):
             core.tick(now)
             if core.state == "READY":
                 up = 1
-            if core.state in ("FAULT_STOP", "PAUSED"):
+            if pause_entry and pause_index is None and core.phase == "ENTRY" and core.follower.progress_ratio > .3:
+                pause_index, pause_follower = index, core.follower
+            expected_pause = pause_index is not None and index - pause_index < 106
+            if core.state == "FAULT_STOP" or (core.state == "PAUSED" and not expected_pause):
                 self.fail(f"Geometric scene stopped: {core.snapshot(now)}")
+            if expected_pause and core.phase == "ENTRY":
+                self.assertIs(core.follower, pause_follower)
             if not phases or phases[-1] != core.phase:
                 phases.append(core.phase)
                 if core.phase == "DRIVE" and "RETURN" in phases:
@@ -85,13 +105,25 @@ class FullRunSceneTests(unittest.TestCase):
         self.assertIn("PASS", phases)
         self.assertIn("REAR_CLEARANCE", phases)
         self.assertLessEqual(abs(core.odom.y_m), config.path_completion_m)
-        self.assertGreater(core.odom.x_m - config.robot_length_m / 2, rectangle[2])
+        self.assertLessEqual(abs(truth.y_m), config.path_completion_m)
+        self.assertGreater(truth.x_m - config.robot_length_m / 2, rectangle[2])
+        if pause_entry:
+            self.assertIsNotNone(pause_index)
 
     def test_thin_square_pole(self):
         self.run_scene((1.85, -.06, 1.97, .06))
 
     def test_long_rectangular_object(self):
         self.run_scene((1.85, -.15, 4.0, .15))
+
+    def test_legacy_100ms_RPM_with_thin_pole(self):
+        self.run_scene((1.85, -.06, 1.97, .06), protocol="legacy")
+
+    def test_legacy_100ms_RPM_with_long_object(self):
+        self.run_scene((1.85, -.15, 4.0, .15), protocol="legacy")
+
+    def test_legacy_100ms_RPM_pause_resumes_same_entry_curve(self):
+        self.run_scene((1.85, -.06, 1.97, .06), protocol="legacy", pause_entry=True)
 
 
 if __name__ == "__main__":

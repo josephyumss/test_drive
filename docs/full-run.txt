@@ -6,22 +6,29 @@ Configuration: config/full_run.json (all lengths in metres)
 
 Deployment prerequisites
 
-This is a Jetson + STM32 change, not just a replacement shell script. The previous
-robot run used MCU_OPEN_LOOP=1 because STM32 status was not reaching Jetson.
-Full run intentionally requires the live return channel. Missing status or old
-firmware will be recorded and keep the robot stationary; there is no open-loop
-fallback. An actual robot test has not been performed in the development PC.
+The default is now Jetson-only: MCU_PROTOCOL=legacy uses the already-deployed
+$CMD/$STATUS ASCII firmware. No STM32CubeIDE project, ST-LINK, build or firmware
+upload is required. The optional previously implemented $FULL/$CTRL extension
+is NOT sent/required in default mode. An actual robot test has not been performed
+in the development PC.
+
+The previous robot run used MCU_OPEN_LOOP=1 because STM32 status was not reaching
+Jetson. Full run requires receiving the firmware's EXISTING $STATUS messages to
+read UP/DOWN changes and actual wheel RPM. Updating firmware is unnecessary, but
+software cannot infer button presses from an absent return signal. No live
+STATUS means zero motion and an automatic diagnostic bundle, not open-loop mode.
 
 1. Copy the entire project to Jetson, keeping the directory structure.
-2. In the actual STM32 CubeIDE project, replace its ASCII firmware main.c with
-   stm32/Core/Src/main.c and add stm32/Core/Inc/full_run_control.h beside main.h.
-   Build/flash the STM32 with its existing HAL/CubeMX files. The separate
-   stm32/CubeMX/main.c example and binary-protocol app_integration are not the
-   full-run firmware. No flashed firmware image is supplied: the MCU target and
-   full CubeIDE project are not present here.
-3. Wire STM32 USART1 RX <- Jetson THS1 TX for commands, STM32 USART3 TX -> Jetson
-   THS2 RX for status, with common GND. Override ports in config/full_run.env
-   (copy config/full_run.env.example) when the existing robot wiring differs.
+2. Keep the existing STM32 firmware. Do NOT replace/upload main.c or headers for
+   normal full-run deployment. The STM32 extension in this repository is optional
+   only for explicitly selected MCU_PROTOCOL=ctrl, which is not the default.
+3. Keep the working command connection (Jetson TX -> STM32 USART1 RX). Verify
+   the existing status output (STM32 USART3 TX -> Jetson UART RX), with common
+   GND. /dev/ttyTHS1 and /dev/ttyTHS2 are only default device names, not verified
+   connector/pin mappings. Set MCU_STATUS_DEVICE in config/full_run.env to the
+   actual receiving port. It may equal MCU_DEVICE if its RX receives USART3 TX;
+   both directions can use one Jetson UART. The MCU's TX/RX and Jetson's RX/TX
+   pins must be identified on the actual board before changing a physical wire.
 4. Side HC-SR04 sensors connect directly to the Jetson BOARD-numbered header:
    left TRIG=33 ECHO=31; right TRIG=7 ECHO=15. Existing level shifting must bring
    ECHO down to the Jetson's GPIO voltage. Confirm that these header pins are
@@ -35,7 +42,7 @@ fallback. An actual robot test has not been performed in the development PC.
 6. Run: sudo bash scripts/start_full_run.sh --check
    This checks files/imports/device access/configuration only.
 7. Run: sudo bash scripts/start_full_run.sh --preflight-only
-   This starts the actual devices and requires fresh YOLO, LiDAR, $CTRL and both
+   This starts the actual devices and requires fresh YOLO, LiDAR, $STATUS and both
    GPIO worker samples, while enforcing zero RPM even if UP is pressed. Success
    does not prove that NO_ECHO represents open space rather than a disconnected
    ultrasonic sensor: both cause no rising edge. Point a known object at each
@@ -56,6 +63,24 @@ command watchdog (current main.c: 800ms). SIGKILL prevents shell cleanup; use
 systemctl stop for a service or normal Ctrl+C/--stop for manual processes.
 An entirely new process discards the old path, resets
 requested speed to zero via a fresh session and requires a new UP press.
+In legacy mode that reset is LOCAL to Jetson: the old MCU base RPM is not reset.
+The initial base value is logged and ignored; only later changes are button
+evidence after READY. Startup presses are consumed, not queued for later motion.
+The first incoming STATUS never starts a new process moving. An old ESTOP left
+by previous shutdown is allowed to clear under zero commands before READY;
+it is not misclassified as a new stop that deadlocks startup.
+
+Immediate user stop WITHOUT exiting the process:
+  sudo bash scripts/start_full_run.sh --instant-stop
+The launcher stays alive, drops to zero without a ramp on the next control
+cycle, and keeps the avoidance plan. A new observable UP resumes saved speed.
+Wait for legacy_stop_acknowledged in controller.log (normally ~0.2s) before UP.
+The first STATUS acknowledging zero wheel targets establishes a new baseline;
+an UP in/before that acknowledgement is consumed so a queued press cannot undo
+the stop. A later UP resumes. The timing is not a hard real-time guarantee.
+The command sends an atomic request addressed to that launcher's PID/start time,
+not a second serial writer. Missing/stale/reused/unrelated PIDs are refused.
+This is a software stop, not a safety-rated physical emergency-stop circuit.
 
 To enable at power-on:
   sudo systemctl disable --now amr-core.service   # only if previously installed
@@ -79,18 +104,36 @@ If systemd reached its restart limit, use systemctl reset-failed before start.
 
 Buttons and stopping
 
-PA4 UP: new debounced press adds 5 RPM; 0 -> 5 starts motion after READY.
-PB7 DOWN short press/release: subtracts 5 RPM, minimum zero. Zero pauses.
-PB7 DOWN held >=800ms: immediately brakes at that moment, saves selected speed.
-Release and press UP to resume that saved speed. While held, UP is ignored.
-The repository has no identified separate physical instant-stop GPIO; long
-DOWN provides the function using the known buttons. $CMD,0,0,1 also represents
-a user instant stop in full-run mode. A separate hardware stop must be bound
-to FullRun_InstantStop if its actual pin becomes known.
+Legacy firmware keeps PA4 UP and PB7 DOWN unchanged. It alters its base value by
+5 RPM within 0..65 and reports that value about every 100ms. Jetson infers UP
+from an increase and DOWN from a decrease, applying those changes to its own
+0/5/10/15/20 selected speed. A DOWN still subtracts 5 at the software speed cap,
+even when the firmware's raw base value is higher than 20. Speed zero pauses.
+After --instant-stop or an observed legacy ESTOP, the first UP restores selected
+speed instead of increasing it. A raw ESTOP still reported prevents departure.
+
+Legacy STATUS does NOT include hold duration or raw button edges. Long DOWN
+instant-stop is therefore REMOVED in default mode; use --instant-stop instead.
+Press/release buttons distinctly, with at least ~0.2s between operations: an UP
+and DOWN both between two STATUS messages can cancel and be unobservable. At
+the old firmware's raw 65 RPM limit, UP cannot change the reported value. To
+restart there, press DOWN once and then UP. This restriction is printed/logged;
+it cannot be eliminated by decoding existing STATUS. Multiple rapid changes or
+MCU reboot cannot be reconstructed exactly from a single base value.
+
+An existing physical instant-stop is only observed if it changes legacy ESTOP.
+No new hardware stop GPIO or hold behaviour is assumed. Firmware/hardware fault
+cause is absent in STATUS; missing communications, bad GPIO and no wheel progress
+still produce latched FAULT_STOP. An observed ESTOP with healthy communications
+is a user pause, consistent with the requested UP-resumable instant-stop policy.
 
 Speeds: 0/5/10/15/20 RPM, per-wheel limit 20; entry cap 12, passing cap 16,
 return cap 14, always also limited by user RPM. Normal speed changes ramp in
-the Jetson; STM32 immediately enforces a lower user cap and zero-stop gate.
+the Jetson. The old firmware's buttons alone do NOT immediately clamp received
+wheel commands: Jetson applies speed changes after receipt of the next STATUS
+(nominal 100ms + next 20ms control cycle, not a hard real-time bound). Its original
+command watchdog remains active independently. Do not assume the optional new
+firmware's motor gate exists on an unchanged MCU.
 Wheel commands are scaled together to preserve turn curvature.
 Front stop/resume thresholds are measured from the front bumper across the
 full 90cm body width plus lateral margin, using calibrated LiDAR points; the
@@ -98,7 +141,7 @@ raw radial front range is also retained in snapshots for diagnosis.
 
 User zero/instant stop and temporary blocked-space stops preserve phase, exact
 curve/follower progress, frozen obstacle, baseline, seen/tail state and rear
-distance. Pose tracking continues; phase timers and tail counters pause. A
+distance. Reported-RPM pose estimation continues; phase timers and tail counters pause. A
 fresh UP is required after hazards clear. A blocked UP is consumed and never
 causes a later automatic departure. Persistent sensor/communication/firmware
 faults latch FAULT_STOP and require stopping/restarting after repair.
@@ -134,9 +177,15 @@ close distance never confirms a tail. Raw distance decreases on approach and
 increases on departure; the old displayed 0.0 is not treated as real distance.
 
 Confirmed tail -> extra forward x displacement 0.425+0.15=0.575m for centre
-sensors -> return to original y=0 path. Cumulative encoder counts are used in
-the supplied firmware, including wraparound, so stopping and reversing cannot
-falsely finish the forward clearance. A new close face cancels tail clearance
+sensors -> return to original y=0 path. Default legacy estimates this displacement
+from REPORTED wheel RPM, wheel size and host receive/control time, NOT commanded
+speed. It has no cumulative counts/MCU timestamps and is less accurate; quantized
+100ms telemetry and slip require checking clearance on the actual robot. Legacy
+RPM values can freeze while its ESTOP flag is set, so those values are suppressed
+instead of creating fictitious motion. Optional ctrl mode uses cumulative
+encoder counts when present. Rear clearance uses forward x displacement, not
+absolute distance travelled, so reverse motion cannot complete it.
+A new close face cancels tail clearance
 and returns to PASS. Three metres without ever seeing the object faults with
 a GPIO/orientation diagnosis; ten metres without a tail pauses. Timers do not
 run while paused. Inside sensor gets three samples for each outside sample,
@@ -150,6 +199,7 @@ Side sensor centre x=0, y=0.25m (body assumed 50cm wide from 20cm protrusion).
 The accepted wider lateral margin is 25cm: expected sensor distance is
 45cm, side stop 30cm, side resume >36cm. Rear margin stays 15cm: extra 57.5cm.
 Encoder counts/output revolution=40000 copied from the current STM32 firmware.
+This count value is only used in optional ctrl mode, not in default legacy mode.
 LiDAR pose defaults to x=0,y=0,yaw=0; camera/LiDAR yaw defaults to 0. Enter real
 mounting offsets in full_run.json. These dimensions/offsets and wheel slip
 affect the actual clearance; the controller logs the exact assumptions.
@@ -201,10 +251,14 @@ latest links to the last successfully owned live run (checks do not replace it).
   events.jsonl*: UTC + monotonic timestamp, raw scans/YOLO/UART/echo pulses,
                  wheel TX and heartbeat gaps, 10Hz pose/status/phase snapshots,
                  frozen geometry, path control points and counter progress
+                 In legacy: raw STATUS, inferred button deltas/local selected
+                 speed, host clock/pose-estimation source and unobservable limits.
   lidar.log / bridge.log / yolo.log: each child process's stdout/stderr
   shutdown.log: independent fallback stop command result
   config.json / system.txt / source.sha256 / source.tar.gz: exact configuration,
                  board/package/device metadata and source snapshot for this run
+                 STM32 source files in the archive are OPTIONAL repository code,
+                 not proof of what firmware bytes run on an unchanged robot.
 
 JSONL uses 16MiB files with 24 backups (~400MiB maximum per invocation).
 Old run directories are preserved, not deleted automatically. GPIO NO_ECHO,
@@ -254,3 +308,12 @@ not used by start_full_run.sh. The new full-run geometric return tests use the
 8cm tolerance and pass. The one-shot launcher's original behavior is preserved.
 
 GPIO API/installation reference: https://github.com/NVIDIA/jetson-gpio
+
+Optional extended firmware (NOT needed for normal deployment)
+
+Only if deliberately choosing MCU_PROTOCOL=ctrl: apply stm32/Core/Src/main.c
+and stm32/Core/Inc/full_run_control.h to the actual existing CubeIDE project,
+build/flash and select ctrl in config/full_run.env. That mode adds $FULL/$CTRL,
+true button counts, hold detection, firmware stop gates and cumulative encoders.
+The MCU target/HAL/complete CubeIDE project and a flashable image are not in this
+repository; portable host C tests do not prove a real firmware build.

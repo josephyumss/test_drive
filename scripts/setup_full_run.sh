@@ -144,7 +144,8 @@ finish() {
             awk -F '\t' 'NR > 1 && ($2 == "FAILED" || $2 == "BLOCKED") {print "  " $1 " / " $2 " / exit=" $3 " / " $6 " / " $7}' "$LOG_DIR/stages.tsv"
         else
             echo 'Dependencies prepared. No motors or services were started.'
-            echo 'Flash updated STM32 main.c + full_run_control.h and connect USART3 status before preflight.'
+            echo 'Existing STM32 firmware is supported; no firmware upload is required.'
+            echo 'Its existing $STATUS output must reach the configured Jetson RX port before preflight.'
             echo 'Next: sudo bash scripts/start_full_run.sh --preflight-only'
         fi
     } | tee "$LOG_DIR/summary.txt"

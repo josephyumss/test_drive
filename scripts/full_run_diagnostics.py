@@ -35,7 +35,9 @@ def main():
                 bad += 1
                 continue
             counts[record["event"]] += 1
-            if record["event"] in ("state", "phase", "exception", "resume_denied", "CTRL_invalid", "scan_invalid", "shutdown"):
+            if record["event"] in ("state", "phase", "exception", "resume_denied", "CTRL_invalid", "STATUS_invalid",
+                                    "legacy_button_limit", "legacy_initial_speed_ignored", "legacy_instant_stop",
+                                    "user_instant_stop_request", "scan_invalid", "shutdown"):
                 recent.append(record)
     print(json.dumps({"directory": str(folder), "event_counts": counts, "unreadable_lines": bad,
                       "recent_transitions_and_errors": list(recent)}, ensure_ascii=False, indent=2))

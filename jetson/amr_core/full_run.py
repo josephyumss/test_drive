@@ -100,7 +100,7 @@ class FullRunConfig:
             if type(getattr(self, key)) is not int:
                 raise ValueError(f"{key}: integer required")
         if not 1 <= self.maximum_rpm <= 20:
-            raise ValueError("maximum_rpm must be 1..20 (STM32 full-run limit)")
+            raise ValueError("maximum_rpm must be 1..20 (Jetson full-run speed limit)")
         if not 0 < self.minimum_confidence <= 1 or not 1 < self.camera_horizontal_fov_deg < 179:
             raise ValueError("Invalid confidence/camera FOV")
         if len({self.left_trig, self.left_echo, self.right_trig, self.right_echo}) != 4:
@@ -148,7 +148,7 @@ class ControlStatus:
     def decode(cls, line: str):
         parts = line.strip().split(",")
         if len(parts) not in (12, 14) or parts[:2] != ["$CTRL", "1"]:
-            raise ValueError("Expected $CTRL version 1, 12/14 fields; flash full-run firmware")
+            raise ValueError("Expected $CTRL version 1, 12/14 fields; use legacy mode for existing $STATUS firmware")
         vals = [int(v) for v in parts[2:]]
         s = cls(*vals)
         if (not 1 <= s.session <= 0x7fffffff or not 0 <= s.base_rpm <= 20
@@ -186,14 +186,17 @@ class FullRunPathFollower(BezierPathFollower):
 
 
 class FullRunController:
-    def __init__(self, config: FullRunConfig, session: int, now: float, emit=None):
+    def __init__(self, config: FullRunConfig, session: int, now: float, emit=None, *, mcu_protocol="ctrl"):
         config.validate()
+        if mcu_protocol not in ("legacy", "ctrl"):
+            raise ValueError("mcu_protocol must be legacy or ctrl")
         self.c = config
+        self.mcu_protocol = mcu_protocol
         self.session = session
         self.emit = emit or (lambda *_args, **_kwargs: None)
         self.state = "STARTUP"
         self.phase = "DRIVE"
-        self.reason = "waiting_for_fresh_sensors_and_CTRL"
+        self.reason = "waiting_for_fresh_sensors_and_" + ("STATUS" if mcu_protocol == "legacy" else "CTRL")
         self.created = self.last_tick = now
         self.active_s = self.phase_started = 0.0
         self.status = None
@@ -277,7 +280,7 @@ class FullRunController:
         self.status, self.status_stamp = status, now
         if previous is None:
             self.resume_up_floor = status.up_count
-            if status.base_rpm != 0 or status.stop_flags:
+            if self.mcu_protocol == "ctrl" and (status.base_rpm != 0 or status.stop_flags):
                 self.fault("handshake_must_reset_speed_and_stop_flags")
         else:
             if status.left_counts is not None and previous.left_counts is not None:
@@ -340,9 +343,10 @@ class FullRunController:
 
     def health_errors(self, now):
         errors = []
+        mcu_name = "STM32_STATUS" if self.mcu_protocol == "legacy" else "STM32_CTRL"
         for name, stamp in (("camera", self.camera_stamp), ("lidar", self.scan_stamp),
-                            ("STM32_CTRL", self.status_stamp)):
-            timeout = self.c.mcu_timeout_s if name == "STM32_CTRL" else self.c.sensor_timeout_s
+                            (mcu_name, self.status_stamp)):
+            timeout = self.c.mcu_timeout_s if name == mcu_name else self.c.sensor_timeout_s
             if not self.fresh(stamp, now, timeout):
                 errors.append(f"{name}_missing_or_stale")
         for side in ("left", "right"):
@@ -664,11 +668,13 @@ class FullRunController:
 
     def snapshot(self, now):
         return {"state": self.state, "phase": self.phase, "reason": self.reason,
+                "mcu_protocol": self.mcu_protocol,
+                "odometry_source": "encoder_counts" if self.status and self.status.left_counts is not None else "reported_RPM_integral",
                 "pose": self.pose(), "command": self.command, "ramp": self.ramped,
                 "status": asdict(self.status) if self.status else None,
                 "ages_s": {"camera": None if self.camera_stamp is None else now - self.camera_stamp,
                            "lidar": None if self.scan_stamp is None else now - self.scan_stamp,
-                           "CTRL": None if self.status_stamp is None else now - self.status_stamp},
+                           "MCU_status": None if self.status_stamp is None else now - self.status_stamp},
                 "sides": {k: asdict(v) for k, v in self.sides.items()}, "front_m": self.front,
                 "front_bumper_clearance_m": self.front_clearance_m(),
                 "inside": self.inside, "baseline_m": self.baseline_value, "side_seen": self.side_seen,

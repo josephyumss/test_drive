@@ -20,6 +20,8 @@ from jetson.amr_core.full_run import ControlStatus, FullRunConfig, FullRunContro
 from jetson.amr_core.full_run_log import FlightRecorder
 from jetson.amr_core.full_run_diagnostics import request_auto_bundle
 from jetson.amr_core.full_run_ultrasonic import UltrasonicWorker
+from jetson.amr_core.full_run_legacy import LegacyControlAdapter
+from jetson.amr_core.full_run_user_stop import read_stop_request
 from jetson.amr_core.reactive_avoidance import wrap_angle
 
 
@@ -99,6 +101,9 @@ def main(arguments=None):
     parser.add_argument("--port", default="/dev/ttyTHS1")
     parser.add_argument("--status-port", default="/dev/ttyTHS2")
     parser.add_argument("--baudrate", type=int, default=115200)
+    parser.add_argument("--mcu-protocol", choices=("legacy", "ctrl"), default="legacy",
+                        help="Default legacy uses existing $CMD/$STATUS; no firmware update")
+    parser.add_argument("--user-stop-file")
     parser.add_argument("--log-dir", required=True)
     parser.add_argument("--supervisor-pid", type=int)
     parser.add_argument("--supervisor-start-ticks")
@@ -107,19 +112,25 @@ def main(arguments=None):
     args = parser.parse_args(arguments)
     config = FullRunConfig.read(args.config)
     if args.check_config:
-        print(json.dumps({"configuration": asdict(config), "expected_side_range_m": config.expected_side_range_m,
+        print(json.dumps({"configuration": asdict(config), "mcu_protocol": args.mcu_protocol,
+                          "expected_side_range_m": config.expected_side_range_m,
                           "rear_clearance_m": config.rear_clearance_m}, indent=2))
         return 0
     recorder = FlightRecorder(args.log_dir, config.log_max_bytes, config.log_backup_count)
     recorder.emit("configuration", config=asdict(config), port=args.port, status_port=args.status_port,
+                  mcu_protocol=args.mcu_protocol,
                   argv=sys.argv, python=sys.version, expected_side_range_m=config.expected_side_range_m,
                   rear_clearance_m=config.rear_clearance_m)
-    core = FullRunController(config, secrets.randbelow(0x7ffffffe) + 1, time.monotonic(), recorder.emit)
+    core = FullRunController(config, secrets.randbelow(0x7ffffffe) + 1, time.monotonic(), recorder.emit,
+                             mcu_protocol=args.mcu_protocol)
+    legacy = LegacyControlAdapter(core.session, config.maximum_rpm, recorder.emit) if args.mcu_protocol == "legacy" else None
     command_uart = status_uart = worker = node = None
     ros_initialized = False
     interrupted = False
     bundle_requested = False
     failed = False
+    last_stop_request = None
+    instant_stop_pending = False
 
     def interrupt(signum, _frame):
         nonlocal interrupted
@@ -145,7 +156,9 @@ def main(arguments=None):
         last_snapshot = -math.inf
         last_command_s = time.monotonic()
         recorder.emit("handshake", session=core.session,
-                      message="Waiting for matching $CTRL v1. Old $STATUS alone cannot enable movement.")
+                      mcu_protocol=args.mcu_protocol,
+                      message=("Waiting for existing $STATUS. No firmware update or $FULL handshake."
+                               if legacy else "Waiting for matching $CTRL v1 (optional extended firmware)."))
         # Imports and GPIO setup can legitimately take seconds before the
         # heartbeat begins. Only running-loop gaps count as scheduler faults.
         core.last_tick = time.monotonic()
@@ -174,39 +187,70 @@ def main(arguments=None):
                 buffer = bytearray(rest)
                 decoded = line.rstrip(b"\r").decode("ascii", errors="replace")
                 recorder.emit("uart_line", line=decoded)
-                if decoded.startswith("$CTRL"):
+                if legacy and decoded.startswith("$STATUS"):
+                    try:
+                        core.update_status(legacy.decode(decoded, time.monotonic(),
+                                                        allow_controls=core.state != "STARTUP"), time.monotonic())
+                    except ValueError as exc:
+                        core.status_stamp = None
+                        recorder.emit("STATUS_invalid", error=str(exc), line=decoded)
+                elif not legacy and decoded.startswith("$CTRL"):
                     try:
                         core.update_status(ControlStatus.decode(decoded), time.monotonic())
                     except ValueError as exc:
                         core.status_stamp = None
                         recorder.emit("CTRL_invalid", error=str(exc), line=decoded)
-                elif decoded.startswith("$STATUS") and core.status is None:
-                    recorder.emit("legacy_firmware", instruction="Flash stm32/Core/Src/main.c plus full_run_control.h")
+                elif not legacy and decoded.startswith("$STATUS") and core.status is None:
+                    recorder.emit("legacy_firmware", instruction="Set MCU_PROTOCOL=legacy to use existing firmware without flashing")
             while True:
                 try:
                     core.update_side(worker.results.get_nowait())
                 except queue.Empty:
                     break
             now = time.monotonic()
-            if core.status is None and now - last_handshake >= 0.5:
+            if not legacy and core.status is None and now - last_handshake >= 0.5:
                 payload = f"$FULL,{core.session}\r\n".encode("ascii")
                 command_uart.write(payload)
                 recorder.emit("uart_tx", kind="handshake", text=payload.decode("ascii"))
                 last_handshake = now
+            if args.user_stop_file and args.supervisor_pid is not None:
+                try:
+                    request = read_stop_request(args.user_stop_file, args.supervisor_pid,
+                                                args.supervisor_start_ticks, last_stop_request)
+                    if request:
+                        last_stop_request = request["request_id"]
+                        recorder.emit("user_instant_stop_request", request=request)
+                        if core.state == "STARTUP":
+                            recorder.emit("user_instant_stop_ignored", reason="startup is already stationary")
+                        elif core.state != "FAULT_STOP":
+                            if legacy:
+                                legacy.request_instant_stop()
+                            else:
+                                instant_stop_pending = True
+                            # Consume any UP already received in this cycle,
+                            # even if we were still READY/already PAUSED.
+                            core.change("PAUSED", "user_instant_stop_terminal")
+                except (OSError, ValueError) as exc:
+                    core.fault(f"user_stop_request_IO_or_format:{exc}")
+                    recorder.emit("exception", context="user_stop_request", error=str(exc))
             command = core.tick(now)
             # Preflight can never issue a nonzero command, even if UP is pressed.
             if args.preflight_only:
                 command = (0, 0)
-            payload = f"$CMD,{command[0]},{command[1]},0\r\n".encode("ascii")
+            payload = f"$CMD,{command[0]},{command[1]},{int(instant_stop_pending)}\r\n".encode("ascii")
             count = command_uart.write(payload)
             if count != len(payload):
                 raise IOError(f"Short UART write: {count}/{len(payload)}")
+            instant_stop_pending = False
             recorder.emit("uart_tx", kind="command", text=payload.decode("ascii"),
                           heartbeat_gap_s=now - last_command_s, state=core.state, phase=core.phase)
             last_command_s = now
             worker.inside = core.inside if core.phase in ("BASELINE", "PASS", "REAR_CLEARANCE") else None
             if now - last_snapshot >= 0.10:
-                recorder.emit("snapshot", **core.snapshot(now))
+                snapshot = core.snapshot(now)
+                if legacy:
+                    snapshot["legacy"] = legacy.snapshot()
+                recorder.emit("snapshot", **snapshot)
                 last_snapshot = now
             if core.state == "FAULT_STOP" and not bundle_requested:
                 # Zero RPM was already sent above. The launcher performs
@@ -219,7 +263,8 @@ def main(arguments=None):
                 except OSError as exc:
                     print(f"[BUNDLE FAIL] Cannot request diagnostics: {exc}", file=sys.stderr, flush=True)
             if args.preflight_only and core.preflight_ready:
-                recorder.emit("ready", message="Preflight passed: fresh camera/LiDAR/CTRL/GPIO, zero motion only")
+                recorder.emit("ready", mcu_protocol=args.mcu_protocol,
+                              message="Preflight passed: fresh camera/LiDAR/MCU status/GPIO, zero motion only")
                 return 0
             if args.preflight_only and core.state == "FAULT_STOP":
                 return 1

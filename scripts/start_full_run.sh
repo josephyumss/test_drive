@@ -6,8 +6,11 @@ MODE="${1:-run}"
 case "$MODE" in
     run|--check|--preflight-only) ;;
     --stop) exec /bin/bash "$PROJECT_DIR/scripts/stop_full_run.sh" ;;
+    --instant-stop) exec /usr/bin/python3 "$PROJECT_DIR/scripts/full_run_user_stop.py" ;;
     -h|--help)
-        echo 'Usage: sudo bash scripts/start_full_run.sh [--check|--preflight-only|--stop]'
+        echo 'Usage: sudo bash scripts/start_full_run.sh [--check|--preflight-only|--instant-stop|--stop]'
+        echo 'Existing STM32 firmware is used by default (MCU_PROTOCOL=legacy).'
+        echo '--instant-stop pauses the live run; UP resumes the saved manoeuvre.'
         echo 'Starts in READY at zero RPM. A new physical UP press starts motion.'
         echo 'Ctrl+C/SIGTERM stops motors and owned processes. Restart manually with the same command.'
         exit 0 ;;
@@ -63,6 +66,7 @@ PYTHON_BIN="${PYTHON_BIN:-/usr/bin/python3}"
 MCU_DEVICE="${MCU_DEVICE:-/dev/ttyTHS1}"
 MCU_STATUS_DEVICE="${MCU_STATUS_DEVICE:-/dev/ttyTHS2}"
 MCU_BAUDRATE="${MCU_BAUDRATE:-115200}"
+MCU_PROTOCOL="${MCU_PROTOCOL:-legacy}"
 LIDAR_DEVICE="${LIDAR_DEVICE:-/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0}"
 FULL_RUN_CONFIG="${FULL_RUN_CONFIG:-$PROJECT_DIR/config/full_run.json}"
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}" ROS_LOCALHOST_ONLY="${ROS_LOCALHOST_ONLY:-0}"
@@ -84,7 +88,7 @@ for file in "$ROS_SETUP" "$JETSON_SETUP" "$LIDAR_SETUP" "$FULL_RUN_CONFIG"; do
     [[ -r "$file" ]] || fail "Missing/unreadable configuration or workspace: $file"
 done
 for device in "$MCU_DEVICE" "$MCU_STATUS_DEVICE" "$LIDAR_DEVICE"; do
-    [[ -r "$device" && -w "$device" ]] || fail "Missing or inaccessible device: $device. Use sudo; STM32 USART3 status RX is mandatory."
+    [[ -r "$device" && -w "$device" ]] || fail "Missing or inaccessible device: $device. Existing STM32 STATUS must reach the configured RX port."
 done
 [[ -d /dev/bus/usb ]] || fail 'Camera USB devices not present'
 [[ -s "$PROJECT_DIR/models/yolo11n.pt" ]] || fail 'Missing models/yolo11n.pt; run setup_yolo_lidar_path_avoidance.sh'
@@ -99,8 +103,9 @@ ros2 pkg prefix ldlidar_stl_ros2
 ros2 pkg prefix amr_vision
 docker info --format '{{json .Runtimes}}' | "$PYTHON_BIN" -c 'import json,sys; assert "nvidia" in json.load(sys.stdin), "NVIDIA container runtime missing"'
 docker image inspect socialguide-amr-oak-yolo:jp6 --format '{{.Id}}'
-echo "[INFO] command=$MCU_DEVICE status=$MCU_STATUS_DEVICE lidar=$LIDAR_DEVICE mode=$MODE"
-echo '[INFO] Full-run STM32 firmware ($CTRL v1) and status UART wiring are required; no open-loop fallback.'
+[[ "$MCU_PROTOCOL" == legacy || "$MCU_PROTOCOL" == ctrl ]] || fail 'MCU_PROTOCOL must be legacy (existing firmware) or ctrl (optional extended firmware).'
+echo "[INFO] command=$MCU_DEVICE status=$MCU_STATUS_DEVICE lidar=$LIDAR_DEVICE mode=$MODE protocol=$MCU_PROTOCOL"
+echo '[INFO] Default legacy uses existing $CMD/$STATUS, without a firmware update. Live status RX is required; no open-loop fallback.'
 [[ "$MODE" != --check ]] || { echo '[CHECK] Installation/configuration passed; live sensors and firmware not checked.'; exit 0; }
 
 # Never stop another run's processes, container or serial-port owner.
@@ -124,8 +129,11 @@ PY
 ln -sfn "$LOG_DIR" "$LOG_ROOT/latest"
 cp "$FULL_RUN_CONFIG" "$LOG_DIR/config.json"
 tar -czf "$LOG_DIR/source.tar.gz" -C "$PROJECT_DIR" \
-    scripts/start_full_run.sh scripts/stop_full_run.sh scripts/full_run_controller.py \
+    scripts/start_full_run.sh scripts/stop_full_run.sh scripts/full_run_controller.py scripts/full_run_user_stop.py \
     jetson/amr_core/full_run.py jetson/amr_core/full_run_log.py \
+    jetson/amr_core/full_run_legacy.py jetson/amr_core/full_run_user_stop.py jetson/amr_core/ascii_serial_bridge.py \
+    jetson/amr_core/serial_bridge.py jetson/amr_core/transport.py jetson/amr_core/packet.py \
+    jetson/amr_core/crc16.py protocol/protocol_constants.py \
     jetson/amr_core/full_run_ultrasonic.py jetson/amr_core/reactive_avoidance.py \
     jetson/amr_core/full_run_diagnostics.py scripts/full_run_diagnostics.py \
     stm32/Core/Src/main.c stm32/Core/Inc/full_run_control.h \
@@ -220,7 +228,8 @@ printf '%s %s\n' "$$" "$(awk '{print $22}' "/proc/$$/stat")" > "$RUN_DIR/full_ru
 # Start the zero-RPM controller before sensor warmup. It owns the only actuator
 # UART and keeps the STM32 heartbeat alive during YOLO initialization.
 args=(--config "$FULL_RUN_CONFIG" --port "$MCU_DEVICE" --status-port "$MCU_STATUS_DEVICE" \
-      --baudrate "$MCU_BAUDRATE" --log-dir "$LOG_DIR" --supervisor-pid "$$" \
+      --baudrate "$MCU_BAUDRATE" --mcu-protocol "$MCU_PROTOCOL" --log-dir "$LOG_DIR" --supervisor-pid "$$" \
+      --user-stop-file "$RUN_DIR/full_run.user_stop.json" \
       --supervisor-start-ticks "$(awk '{print $22}' "/proc/$$/stat")")
 [[ "$MODE" != --preflight-only ]] || args+=(--preflight-only)
 setsid "$PYTHON_BIN" -u "$PROJECT_DIR/scripts/full_run_controller.py" "${args[@]}" \

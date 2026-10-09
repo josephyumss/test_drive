@@ -88,11 +88,15 @@ class FullRunLauncherTests(unittest.TestCase):
             path.chmod(0o755)
         for directory in ("scripts", "config", "models", "usb", "jetson_ws/install", "jetson/amr_core", "docker",
                           "jetson_ws/src/amr_vision/amr_vision", "jetson_ws/src/amr_vision/config",
-                          "stm32/Core/Src", "stm32/Core/Inc", "logs", ".run"):
+                          "stm32/Core/Src", "stm32/Core/Inc", "protocol", "logs", ".run"):
             (self.root / directory).mkdir(parents=True, exist_ok=True)
         for path in ("ros.bash", "lidar.bash", "jetson_ws/install/setup.bash", "mcu", "status", "lidar",
                      "jetson/amr_core/full_run.py", "jetson/amr_core/reactive_avoidance.py",
                      "jetson/amr_core/full_run_log.py", "jetson/amr_core/full_run_ultrasonic.py",
+                     "jetson/amr_core/full_run_legacy.py", "jetson/amr_core/full_run_user_stop.py",
+                     "jetson/amr_core/ascii_serial_bridge.py", "jetson/amr_core/serial_bridge.py",
+                     "jetson/amr_core/transport.py", "jetson/amr_core/packet.py", "jetson/amr_core/crc16.py",
+                     "protocol/protocol_constants.py", "scripts/full_run_user_stop.py",
                      "docker/oak_yolo_udp.py", "jetson_ws/src/amr_vision/amr_vision/yolo_udp_bridge_node.py",
                      "jetson_ws/src/amr_vision/config/yolo.yaml",
                      "stm32/Core/Src/main.c", "stm32/Core/Inc/full_run_control.h"):

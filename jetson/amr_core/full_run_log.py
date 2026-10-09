@@ -43,7 +43,10 @@ class FlightRecorder:
                   "event": event, **data}
         self.logger.info(json.dumps(json_safe(record), ensure_ascii=False, allow_nan=False,
                                     separators=(",", ":")))
-        if event in {"state", "phase", "exception", "ready", "resume_denied", "shutdown", "handshake"}:
+        if event in {"state", "phase", "exception", "ready", "resume_denied", "shutdown", "handshake",
+                     "legacy_button_limit", "legacy_initial_speed_ignored", "legacy_instant_stop",
+                     "legacy_stop_acknowledged", "legacy_stop_UP_consumed",
+                     "user_instant_stop_request"}:
             print(json.dumps(json_safe(record), ensure_ascii=False), flush=True)
 
     def close(self):

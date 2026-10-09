@@ -82,7 +82,8 @@ class EchoTests(unittest.TestCase):
 
 
 class AdapterTests(unittest.TestCase):
-    def run_preflight(self, firmware=True, fail_write=False):
+    def run_preflight(self, firmware=True, fail_write=False, protocol="ctrl", raw_base=0, same_port=False,
+                      live_stop_cycle=None, resume_after_stop=False, initial_emergency=False):
         uarts = []
         captured = {}
         class Uart:
@@ -107,6 +108,13 @@ class AdapterTests(unittest.TestCase):
                 if data.startswith(b"$FULL,") and firmware:
                     session = int(data.decode().strip().split(",")[1])
                     uarts[1].incoming.extend(f"$CTRL,1,{session},0,0,0,0,0,0,0,0,1000\r\n".encode())
+                elif protocol == "legacy" and firmware and data.startswith(b"$CMD"):
+                    base = raw_base
+                    if live_stop_cycle is not None:
+                        cycle = captured.get("cycle", 0)
+                        base = 0 if cycle <= 2 else (15 if resume_after_stop and cycle >= 6 else 10)
+                    emergency = int(initial_emergency and len(self.writes) == 1)
+                    uarts[-1].incoming.extend(f"$STATUS,{base},1234,45,0,0,0,0,0,0,{emergency}\r\n".encode())
                 return len(data)
             def close(self):
                 self.closed = True
@@ -123,6 +131,7 @@ class AdapterTests(unittest.TestCase):
             time.sleep(0.30)
             return types.SimpleNamespace(destroy_node=lambda: None)
         def spin_once(*_args, **_kwargs):
+            captured["cycle"] = captured.get("cycle", 0) + 1
             core = captured["core"]
             now = time.monotonic()
             core.update_camera([], now)
@@ -133,21 +142,40 @@ class AdapterTests(unittest.TestCase):
         serial.Serial = Uart
         ros = types.ModuleType("rclpy")
         ros.init = ros.shutdown = lambda: None
-        ros.ok = lambda: True
+        ros.ok = lambda: live_stop_cycle is None or captured.get("cycle", 0) < 10
         ros.spin_once = spin_once
         jetson = types.ModuleType("Jetson")
         jetson.__path__ = []
         gpio = types.ModuleType("Jetson.GPIO")
+        original_read = Path.read_text
+        def read_text(path, *args, **kwargs):
+            if path == Path("/proc/321/stat"):
+                return "321 (bash) S " + "0 " * 18 + "456 0"
+            return original_read(path, *args, **kwargs)
+        def stop_request(_path, _pid, _ticks, last_id):
+            if live_stop_cycle is not None and captured.get("cycle", 0) >= live_stop_cycle and last_id is None:
+                return {"request_id": "test-stop", "action": "instant_stop", "pid": 321, "start_ticks": "456"}
+            return None
         with tempfile.TemporaryDirectory() as folder:
-            config = asdict(replace(FullRunConfig(), startup_timeout_s=0.5))
+            config = asdict(replace(FullRunConfig(), startup_timeout_s=0.5, acceleration_rpm_s=1000))
             config_path = Path(folder) / "config.json"
             config_path.write_text(json.dumps(config))
             with mock.patch.dict(sys.modules, {"serial": serial, "rclpy": ros, "Jetson": jetson, "Jetson.GPIO": gpio}), \
                     mock.patch.object(adapter, "make_node", side_effect=make_node), \
                     mock.patch.object(adapter, "UltrasonicWorker", Worker), \
+                    mock.patch.object(Path, "read_text", read_text), \
+                    mock.patch.object(adapter, "read_stop_request", side_effect=stop_request), \
                     mock.patch.object(adapter.signal, "signal"), mock.patch("builtins.print"):
-                result = adapter.main(["--config", str(config_path), "--port", "commands", "--status-port", "status",
-                                       "--log-dir", folder, "--preflight-only"])
+                arguments = ["--config", str(config_path), "--port", "commands", "--status-port", "commands" if same_port else "status",
+                             "--log-dir", folder]
+                if live_stop_cycle is None:
+                    arguments += ["--preflight-only"]
+                else:
+                    arguments += ["--supervisor-pid", "321", "--supervisor-start-ticks", "456",
+                                  "--user-stop-file", str(Path(folder) / "stop.json")]
+                if protocol != "legacy":
+                    arguments += ["--mcu-protocol", protocol]
+                result = adapter.main(arguments)
             records = [json.loads(line) for line in (Path(folder) / "events.jsonl").read_text().splitlines()]
             captured["automatic_request"] = (Path(folder) / "auto_bundle.request.json").exists()
         self.automatic_request = captured["automatic_request"]
@@ -177,6 +205,51 @@ class AdapterTests(unittest.TestCase):
         self.assertTrue(self.automatic_request)
         self.assertIn(b"$CMD,0,0,1\r\n", uarts[0].writes)
         self.assertTrue(all(u.closed for u in uarts))
+
+    def test_default_preflight_accepts_old_firmware_and_never_sends_FULL(self):
+        result, uarts, records = self.run_preflight(protocol="legacy", raw_base=40)
+        self.assertEqual(result, 0, records)
+        self.assertFalse(any(message.startswith(b"$FULL") for message in uarts[0].writes))
+        self.assertTrue(all(message.startswith(b"$CMD,0,0,") for message in uarts[0].writes))
+        self.assertTrue(any(r["event"] == "legacy_status_normalized" and r["selected_rpm"] == 0 for r in records))
+        self.assertFalse(self.automatic_request)
+
+    def test_legacy_same_uart_for_commands_and_status_is_supported(self):
+        result, uarts, records = self.run_preflight(protocol="legacy", same_port=True)
+        self.assertEqual(result, 0, records)
+        self.assertEqual(len(uarts), 1)
+        self.assertTrue(uarts[0].closed)
+
+    def test_legacy_preflight_recovers_prior_shutdown_ESTOP_without_button_press(self):
+        result, uarts, records = self.run_preflight(protocol="legacy", initial_emergency=True)
+        self.assertEqual(result, 0, records)
+        self.assertTrue(any(r["event"] == "legacy_startup_ESTOP" for r in records))
+        self.assertFalse(self.automatic_request)
+
+    def test_legacy_missing_status_is_a_fault_not_an_open_loop_fallback(self):
+        result, uarts, records = self.run_preflight(protocol="legacy", firmware=False)
+        self.assertEqual(result, 1)
+        self.assertFalse(any(message.startswith(b"$FULL") for message in uarts[0].writes))
+        self.assertTrue(any("STM32_STATUS_missing_or_stale" in str(r) for r in records))
+        self.assertTrue(self.automatic_request)
+
+    def test_terminal_stop_at_READY_consumes_simultaneous_UP(self):
+        result, uarts, records = self.run_preflight(protocol="legacy", live_stop_cycle=4)
+        self.assertEqual(result, 0, records)
+        self.assertFalse(any(r.get("after") == "RUNNING" for r in records))
+        self.assertTrue(all(m.startswith(b"$CMD,0,0,") for m in uarts[0].writes))
+        self.assertTrue(any(r.get("after") == "PAUSED" for r in records))
+
+    def test_live_terminal_stop_then_UP_restores_saved_speed_without_exit(self):
+        result, uarts, records = self.run_preflight(protocol="legacy", live_stop_cycle=5, resume_after_stop=True)
+        self.assertEqual(result, 0, records)
+        states = [r["after"] for r in records if r["event"] == "state"]
+        self.assertEqual(states[:4], ["READY", "RUNNING", "PAUSED", "RUNNING"])
+        self.assertTrue(any(r["event"] == "legacy_status_normalized" and r["base_delta"] == 5 and r["selected_rpm"] == 10 for r in records))
+        paused_tx = [r["text"] for r in records if r["event"] == "uart_tx" and r.get("state") == "PAUSED"]
+        self.assertTrue(paused_tx)
+        self.assertTrue(all(text.startswith("$CMD,0,0,") for text in paused_tx))
+        self.assertFalse(self.automatic_request)
 
 
 if __name__ == "__main__":
