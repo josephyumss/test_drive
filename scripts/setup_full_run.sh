@@ -14,6 +14,7 @@ esac
 (( $# == 0 )) || { echo 'Too many arguments' >&2; exit 2; }
 
 LOG_ROOT="$PROJECT_DIR/logs/full_run_setup"
+umask 027
 mkdir -p "$LOG_ROOT"
 LOG_DIR="$(mktemp -d "$LOG_ROOT/$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX")"
 export PROJECT_DIR PYTHON_BIN="${PYTHON_BIN:-/usr/bin/python3}"
@@ -114,7 +115,7 @@ archive_failure() {
         code=$?
     fi
     printf '%s\n' "$output" >> "$LOG_DIR/bundle.log"
-    if (( code == 0 )) && mv -- "$temporary" "$archive"; then
+    if (( code == 0 )) && chmod g+r -- "$temporary" && mv -- "$temporary" "$archive"; then
         echo "[BUNDLE] Saved: $archive (tar fallback)" | tee -a "$LOG_DIR/launcher.log"
     else
         rm -f -- "$temporary"
@@ -170,6 +171,8 @@ trap finish EXIT
 trap 'setup_code=$?; echo "[FAIL] exit=$setup_code line=$LINENO command=$BASH_COMMAND"; exit "$setup_code"' ERR
 trap 'echo "[INTERRUPTED] User stopped installation."; exit 130' INT
 trap 'echo "[INTERRUPTED] Installation received SIGTERM."; exit 143' TERM
+source "$PROJECT_DIR/scripts/full_run_log_access.sh"
+full_run_prepare_log_access "$PROJECT_DIR" "$LOG_ROOT" "$LOG_DIR"
 echo "[LOG] $LOG_DIR"
 echo '[INFO] Independent steps continue after errors; FAILED/BLOCKED means setup is incomplete.'
 

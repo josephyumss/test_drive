@@ -4,6 +4,27 @@ Entry point: scripts/start_full_run.sh
 Controller: scripts/full_run_controller.py and jetson/amr_core/full_run.py
 Configuration: config/full_run.json (all lengths in metres)
 
+2026-10-09 setup failure fix
+
+The received setup log 20261009T104457Z-vhFyNM failed only verify_python:
+Jetson.GPIO 2.1.7 raised "Could not determine Jetson model". ROS, LiDAR, model,
+Docker/NVIDIA runtime and configuration checks passed. The existing fused and
+integrated launchers exported JETSON_MODEL_NAME=JETSON_ORIN_NANO; full-run did not.
+Both full-run setup workers and the boot/manual launcher now export the same
+fallback for this project's Orin Nano/Super. A recognized hardware device-tree
+model still takes precedence inside NVIDIA's library. This is not a pinmux change
+or proof of sensor wiring, nor a guessed board selection for an unrelated robot.
+Runtime overrides go in config/full_run.env; setup overrides, if actually needed,
+are passed with sudo env JETSON_MODEL_NAME=<verified model> bash scripts/setup_full_run.sh.
+
+An installed GPIO package that still cannot import now FAILS its setup stage;
+the installer no longer treats pip's "already satisfied" as a successful repair.
+A newly installed package also has to pass import before that stage can pass.
+System logs now record the selected model, device-tree model/compatible/ids,
+GPIO chip labels and installed GPIO package metadata. GPIO detection/import
+failure still prevents starting the controller; no failed sensor is bypassed.
+Reference: https://github.com/NVIDIA/jetson-gpio/blob/v2.1.7/lib/python/Jetson/GPIO/gpio_pin_data.py
+
 Deployment prerequisites
 
 The default is now Jetson-only: MCU_PROTOCOL=legacy uses the already-deployed
@@ -300,6 +321,15 @@ Sharing diagnostics through Git
 logs/full_run_setup/. Other log folders, the local latest symlink, incomplete
 *.part archives and private config/full_run.env remain ignored. The scripts do
 not stage, commit or push diagnostics automatically.
+
+New sudo/systemd runs keep root as the log owner but assign the checkout's group
+to log directories, set group read/traverse and directory setgid, and use umask
+027. Finished archives are 0640 (also in the tar fallback). The checkout's normal
+user can therefore read/add them without sudo git or repeated recursive chown.
+No world-read or group-write permission is added. This applies to NEW attempts;
+old root-only log folders may still need the targeted permission recovery already
+described in the chat. A root-owned checkout with a root-only group is not a
+normal user checkout and must be corrected separately.
 
 Prefer adding ONLY the completed archive printed after [BUNDLE] Saved:
   git add -- "<actual archive path printed by the launcher>"

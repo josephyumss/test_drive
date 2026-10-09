@@ -84,6 +84,10 @@ def create_bundle(folder, *, automatic=False, reason="runtime_failure"):
             entry = tarfile.TarInfo(f"{folder.name}/bundle_metadata.json")
             entry.size = len(payload)
             archive.addfile(entry, io.BytesIO(payload))
+        # mkstemp uses 0600 even under a readable umask. The launcher's setgid
+        # log root supplies the checkout group; let that group read the finished
+        # archive without handing it root's credentials or write permissions.
+        os.chmod(temporary, stat.S_IMODE(temporary.stat().st_mode) | stat.S_IRGRP)
         os.replace(temporary, destination)
         if automatic:
             # A completed archive is preserved even if fault-state logs later

@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -96,8 +97,46 @@ class BundleTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(Path(result.stdout.strip()).is_file())
 
+    @unittest.skipUnless(os.name == "posix", "requires Unix file permissions")
+    def test_completed_archive_is_group_readable_without_world_access_or_group_write(self):
+        archive = create_bundle(self.folder, automatic=True)
+        mode = stat.S_IMODE(archive.stat().st_mode)
+        self.assertEqual(mode, 0o640)
+
 
 class EarlyLauncherFailureTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "posix", "requires Unix group/setgid permissions")
+    def test_log_directories_and_future_files_inherit_checkout_group_read_access(self):
+        with tempfile.TemporaryDirectory(prefix="full-run-log-access-") as temporary:
+            project = Path(temporary)
+            log_root = project / "logs/full_run_setup"
+            log_dir = log_root / "attempt"
+            log_dir.mkdir(parents=True)
+            for path in (project / "logs", log_root, log_dir):
+                path.chmod(0o700)
+            early = log_dir / "stages.tsv"
+            early.write_text("early file\n")
+            early.chmod(0o600)
+            result = subprocess.run(["/bin/bash", "-c", '''
+set -Eeuo pipefail
+source "$1"
+full_run_prepare_log_access "$2" "$3" "$4"
+umask 027
+mkdir "$4/child"
+printf 'future log\\n' > "$4/child/controller.log"
+''', "test-log-access", str(ROOT / "scripts/full_run_log_access.sh"),
+                                     str(project), str(log_root), str(log_dir)],
+                                    capture_output=True, text=True, timeout=15)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            group = project.stat().st_gid
+            for path in (project / "logs", log_root, log_dir, log_dir / "child"):
+                self.assertEqual(path.stat().st_gid, group)
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o2750)
+            for path in (early, log_dir / "launcher.log", log_dir / "child/controller.log"):
+                self.assertEqual(path.stat().st_gid, group)
+                self.assertTrue(path.stat().st_mode & stat.S_IRGRP)
+                self.assertFalse(path.stat().st_mode & stat.S_IWGRP)
+
     def test_startup_failure_archives_without_opening_actuator(self):
         # Only the platform guard is replaced in a disposable checkout. No
         # device exists and startup fails at dependency discovery. This tests
@@ -113,11 +152,13 @@ class EarlyLauncherFailureTests(unittest.TestCase):
             source = source.replace('[[ "$(uname -s)" == Linux ]]', '[[ 1 == 1 ]]')
             (folder / "scripts/start_full_run.sh").write_text(source, encoding="utf8")
             shutil.copyfile(ROOT / "scripts/full_run_diagnostics.py", folder / "scripts/full_run_diagnostics.py")
+            shutil.copyfile(ROOT / "scripts/full_run_log_access.sh", folder / "scripts/full_run_log_access.sh")
             shutil.copyfile(ROOT / "jetson/amr_core/full_run_diagnostics.py", folder / "jetson/amr_core/full_run_diagnostics.py")
             environment = dict(os.environ, PYTHON_BIN=sys.executable.replace("\\", "/"),
                                ROS_SETUP=str(folder / "missing-ros-setup"))
             for key in ("FULL_RUN_LOG_ROOT", "FULL_RUN_LOG_DIR", "LIDAR_SETUP", "PYTHONPATH"):
                 environment.pop(key, None)
+            environment.pop("JETSON_MODEL_NAME", None)
             result = subprocess.run([bash, str(folder / "scripts/start_full_run.sh")],
                                     env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                     text=True, timeout=30)
@@ -125,6 +166,8 @@ class EarlyLauncherFailureTests(unittest.TestCase):
             archives = list((folder / "logs/full_run").glob("*-debug.tar.gz"))
             self.assertEqual(len(archives), 1, result.stdout)
             self.assertIn("[BUNDLE] Saved:", result.stdout)
+            self.assertIn("[GPIO] JETSON_MODEL_NAME=JETSON_ORIN_NANO", result.stdout)
+            self.assertIn("[LOG_ACCESS]", result.stdout)
             with tarfile.open(archives[0], "r:gz") as archive:
                 self.assertTrue(any(path.endswith("launcher.log") for path in archive.getnames()))
 

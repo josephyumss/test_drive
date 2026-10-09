@@ -21,6 +21,7 @@ esac
 
 RUN_DIR="$PROJECT_DIR/.run"
 LOG_ROOT="${FULL_RUN_LOG_ROOT:-$PROJECT_DIR/logs/full_run}"
+umask 027
 mkdir -p "$RUN_DIR" "$LOG_ROOT"
 LOG_DIR="$(mktemp -d "$LOG_ROOT/$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX")"
 export FULL_RUN_LOG_DIR="$LOG_DIR"
@@ -53,6 +54,8 @@ early_exit() {
     exit "$result"
 }
 trap early_exit EXIT
+source "$PROJECT_DIR/scripts/full_run_log_access.sh"
+full_run_prepare_log_access "$PROJECT_DIR" "$LOG_ROOT" "$LOG_DIR"
 
 # Optional site-specific file; no dependencies on a desktop login session.
 if [[ -f "$PROJECT_DIR/config/full_run.env" ]]; then
@@ -71,6 +74,10 @@ LIDAR_DEVICE="${LIDAR_DEVICE:-/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_U
 FULL_RUN_CONFIG="${FULL_RUN_CONFIG:-$PROJECT_DIR/config/full_run.json}"
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}" ROS_LOCALHOST_ONLY="${ROS_LOCALHOST_ONLY:-0}"
 export PYTHONPATH="$PROJECT_DIR${PYTHONPATH:+:$PYTHONPATH}" PYTHONUNBUFFERED=1
+# This project's board is Orin Nano/Super, as in the existing fused launchers.
+# Export explicitly for sudo/manual runs AND systemd (no desktop environment).
+export JETSON_MODEL_NAME="${JETSON_MODEL_NAME:-JETSON_ORIN_NANO}"
+echo "[GPIO] JETSON_MODEL_NAME=$JETSON_MODEL_NAME (project board fallback; detected hardware still takes precedence)"
 if [[ -z "${LIDAR_SETUP:-}" ]]; then
     runtime_user="${SUDO_USER:-$(stat -c %U "$PROJECT_DIR")}"
     runtime_user_home="$(getent passwd "$runtime_user" | cut -d: -f6)"
@@ -130,6 +137,7 @@ ln -sfn "$LOG_DIR" "$LOG_ROOT/latest"
 cp "$FULL_RUN_CONFIG" "$LOG_DIR/config.json"
 tar -czf "$LOG_DIR/source.tar.gz" -C "$PROJECT_DIR" \
     scripts/start_full_run.sh scripts/stop_full_run.sh scripts/full_run_controller.py scripts/full_run_user_stop.py \
+    scripts/full_run_log_access.sh scripts/full_run_setup_steps.sh \
     jetson/amr_core/full_run.py jetson/amr_core/full_run_log.py \
     jetson/amr_core/full_run_legacy.py jetson/amr_core/full_run_user_stop.py jetson/amr_core/ascii_serial_bridge.py \
     jetson/amr_core/serial_bridge.py jetson/amr_core/transport.py jetson/amr_core/packet.py \

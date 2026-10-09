@@ -50,7 +50,7 @@ class SetupRunnerTests(unittest.TestCase):
         self.folder = Path(self.temp.name)
         (self.folder / "scripts").mkdir()
         (self.folder / "jetson/amr_core").mkdir(parents=True)
-        for filename in ("setup_full_run.sh", "full_run_diagnostics.py"):
+        for filename in ("setup_full_run.sh", "full_run_diagnostics.py", "full_run_log_access.sh"):
             shutil.copyfile(ROOT / "scripts" / filename, self.folder / "scripts" / filename)
         shutil.copyfile(ROOT / "jetson/amr_core/full_run_diagnostics.py",
                         self.folder / "jetson/amr_core/full_run_diagnostics.py")
@@ -231,6 +231,7 @@ class SetupWorkerTests(unittest.TestCase):
         self.environment["SETUP_TEST_BIN"] = self.bin_dir.as_posix()
         self.environment["TRACE_FILE"] = (self.folder / "trace.txt").as_posix()
         self.environment.pop("ROS_APT_SOURCE_VERSION", None)
+        self.environment.pop("JETSON_MODEL_NAME", None)
 
     def stub(self, name, source):
         script = self.bin_dir / name
@@ -306,6 +307,57 @@ fi
         for name in ("serial", "numpy", "yaml", "cv2", "Jetson.GPIO"):
             self.assertIn(f"[ERROR] Import failed: {name}", result.stdout)
         self.assertIn("[SUMMARY] Failed imports:", result.stdout)
+
+    def test_gpio_model_fallback_is_present_in_every_python_verification(self):
+        fake_modules = self.folder / "modules"
+        fake_modules.mkdir()
+        for name in ("serial", "numpy", "yaml", "cv2"):
+            (fake_modules / f"{name}.py").write_bytes(b"__version__ = 'test'\n")
+        (fake_modules / "Jetson").mkdir()
+        (fake_modules / "Jetson/__init__.py").write_bytes(b"")
+        (fake_modules / "Jetson/GPIO.py").write_bytes(
+            b"import os\n"
+            b"assert os.environ.get('JETSON_MODEL_NAME') == os.environ['EXPECTED_GPIO_MODEL'], 'Could not determine Jetson model'\n")
+        self.environment["PYTHONPATH"] = str(fake_modules)
+        for override, expected in ((None, "JETSON_ORIN_NANO"), ("JETSON_ORIN_NX", "JETSON_ORIN_NX")):
+            with self.subTest(model=override):
+                if override is None:
+                    self.environment.pop("JETSON_MODEL_NAME", None)
+                else:
+                    self.environment["JETSON_MODEL_NAME"] = override
+                self.environment["EXPECTED_GPIO_MODEL"] = expected
+                result = self.run_worker("verify_python")
+                self.assertEqual(result.returncode, 0, result.stdout)
+                self.assertIn(f"[GPIO] JETSON_MODEL_NAME={expected}", result.stdout)
+                self.assertIn("[OK] Jetson.GPIO", result.stdout)
+
+    def test_installed_but_unusable_gpio_is_not_reinstalled_or_reported_as_success(self):
+        self.stub("python-test", r'''
+echo "$* model=$JETSON_MODEL_NAME" >> "$TRACE_FILE"
+if [[ "$1" == -c && "$2" == *'importlib.metadata'* ]]; then echo 2.1.7; exit 0; fi
+if [[ "$1" == -c ]]; then echo 'Could not determine Jetson model' >&2; exit 1; fi
+echo 'BUG: pip called'; exit 91
+''')
+        self.environment["PYTHON_BIN"] = (self.bin_dir / "python-test").as_posix()
+        result = self.run_worker("jetson_gpio")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("installed but import failed", result.stdout)
+        self.assertNotIn("-m pip", self.folder.joinpath("trace.txt").read_text())
+
+    def test_gpio_installation_requires_a_successful_post_install_import(self):
+        self.stub("python-test", r'''
+echo "$* model=$JETSON_MODEL_NAME" >> "$TRACE_FILE"
+if [[ "$1" == -c && "$2" == *'importlib.metadata'* ]]; then exit 1; fi
+if [[ "$1" == -m && "$2" == pip ]]; then exit 0; fi
+if [[ "$1" == -c ]]; then echo 'simulated GPIO import failure' >&2; exit 1; fi
+exit 92
+''')
+        self.environment["PYTHON_BIN"] = (self.bin_dir / "python-test").as_posix()
+        result = self.run_worker("jetson_gpio")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        trace = self.folder.joinpath("trace.txt").read_text().splitlines()
+        self.assertTrue(any("-m pip install --no-deps Jetson.GPIO" in line for line in trace))
+        self.assertEqual(sum(line.startswith("-c import Jetson.GPIO") for line in trace), 2)
 
 
 if __name__ == "__main__":

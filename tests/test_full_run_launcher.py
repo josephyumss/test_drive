@@ -96,7 +96,7 @@ class FullRunLauncherTests(unittest.TestCase):
                      "jetson/amr_core/full_run_legacy.py", "jetson/amr_core/full_run_user_stop.py",
                      "jetson/amr_core/ascii_serial_bridge.py", "jetson/amr_core/serial_bridge.py",
                      "jetson/amr_core/transport.py", "jetson/amr_core/packet.py", "jetson/amr_core/crc16.py",
-                     "protocol/protocol_constants.py", "scripts/full_run_user_stop.py",
+                     "protocol/protocol_constants.py", "scripts/full_run_user_stop.py", "scripts/full_run_setup_steps.sh",
                      "docker/oak_yolo_udp.py", "jetson_ws/src/amr_vision/amr_vision/yolo_udp_bridge_node.py",
                      "jetson_ws/src/amr_vision/config/yolo.yaml",
                      "stm32/Core/Src/main.c", "stm32/Core/Inc/full_run_control.h"):
@@ -104,6 +104,7 @@ class FullRunLauncherTests(unittest.TestCase):
         (self.root / "models/yolo11n.pt").write_bytes(b"model")
         shutil.copyfile(ROOT / "config/full_run.json", self.root / "config/full_run.json")
         shutil.copyfile(ROOT / "scripts/stop_full_run.sh", self.root / "scripts/stop_full_run.sh")
+        shutil.copyfile(ROOT / "scripts/full_run_log_access.sh", self.root / "scripts/full_run_log_access.sh")
         shutil.copyfile(ROOT / "scripts/full_run_diagnostics.py", self.root / "scripts/full_run_diagnostics.py")
         shutil.copyfile(ROOT / "jetson/amr_core/full_run_diagnostics.py", self.root / "jetson/amr_core/full_run_diagnostics.py")
         (self.root / "scripts/full_run_controller.py").touch()

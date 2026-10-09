@@ -11,6 +11,9 @@ BASE_PACKAGES=(curl ca-certificates software-properties-common git build-essenti
 ROS_PACKAGES=(ros-humble-ros-base ros-humble-cv-bridge ros-humble-rosidl-default-generators
     ros-humble-tf2-ros python3-colcon-common-extensions)
 export DEBIAN_FRONTEND=noninteractive LC_ALL=C.UTF-8 LANG=C.UTF-8
+# Match the working fused/integrated launchers and the full-run boot launcher.
+# Jetson.GPIO 2.1.7 supports this fallback when its device-tree match fails.
+export JETSON_MODEL_NAME="${JETSON_MODEL_NAME:-JETSON_ORIN_NANO}"
 if [[ -f "${FULL_RUN_SETUP_CONTEXT:-}" && "$STEP" != user_context ]]; then
     source "$FULL_RUN_SETUP_CONTEXT"
 fi
@@ -79,6 +82,20 @@ system_metadata() {
         if [[ -r "$metadata_file" ]]; then echo "--- $metadata_file"; sed -n '1,40p' "$metadata_file"; fi
     done
     echo "Project=$PROJECT_DIR Python=$PYTHON_BIN"
+    echo "JETSON_MODEL_NAME=$JETSON_MODEL_NAME"
+    for metadata_file in /proc/device-tree/model /proc/device-tree/compatible /proc/device-tree/chosen/ids; do
+        if [[ -r "$metadata_file" ]]; then
+            echo "--- $metadata_file"
+            tr '\0' '\n' < "$metadata_file"
+        fi
+    done
+    if command -v dpkg-query >/dev/null 2>&1; then dpkg-query -W nvidia-jetpack python3-jetson-gpio 2>&1 || true; fi
+    if command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+        "$PYTHON_BIN" -m pip show Jetson.GPIO 2>&1 || true
+    fi
+    for metadata_file in /sys/bus/gpio/devices/gpiochip*/label; do
+        if [[ -r "$metadata_file" ]]; then echo "--- $metadata_file"; head -c 256 "$metadata_file"; echo; fi
+    done
     if command -v "$PYTHON_BIN" >/dev/null 2>&1; then "$PYTHON_BIN" --version || true; fi
     if command -v docker >/dev/null 2>&1; then docker --version || true; fi
     if command -v dpkg-query >/dev/null 2>&1; then
@@ -89,7 +106,7 @@ system_metadata() {
 source_snapshot() {
     mkdir -p "$FULL_RUN_SETUP_LOG_DIR/source"
     local source_file
-    for source_file in scripts/setup_full_run.sh scripts/full_run_setup_steps.sh scripts/download_models.sh \
+    for source_file in scripts/setup_full_run.sh scripts/full_run_setup_steps.sh scripts/full_run_log_access.sh scripts/download_models.sh \
         scripts/build_yolo_docker.sh docker/Dockerfile.oak-yolo config/full_run.json; do
         mkdir -p "$FULL_RUN_SETUP_LOG_DIR/source/$(dirname "$source_file")"
         cp "$PROJECT_DIR/$source_file" "$FULL_RUN_SETUP_LOG_DIR/source/$source_file"
@@ -198,22 +215,35 @@ yolo_image() {
 }
 jetson_gpio() {
     require_command "$PYTHON_BIN"
+    echo "[GPIO] JETSON_MODEL_NAME=$JETSON_MODEL_NAME"
     if "$PYTHON_BIN" -c 'import Jetson.GPIO'; then already 'Jetson.GPIO import passed.'; fi
+    if "$PYTHON_BIN" -c 'from importlib.metadata import version; print(version("Jetson.GPIO"))'; then
+        echo '[ERROR] Jetson.GPIO is installed but import failed. Not reinstalling the same package or claiming success.' >&2
+        echo '[ERROR] Check model/compatible/GPIO chip metadata in system_before.log and the import traceback.' >&2
+        return 1
+    fi
     # Do not replace JetPack PyTorch/CUDA or upgrade unrelated pip packages.
     "$PYTHON_BIN" -m pip install --no-deps Jetson.GPIO
+    # A successful pip command is not proof that GPIO actually imports.
+    "$PYTHON_BIN" -c 'import Jetson.GPIO; print("[OK] Jetson.GPIO import after installation")'
 }
 
 verify_python() {
     require_command "$PYTHON_BIN"
     "$PYTHON_BIN" - <<'PY'
 import importlib
+import os
 import sys
 import traceback
 failed = []
+print(f"[GPIO] JETSON_MODEL_NAME={os.environ.get('JETSON_MODEL_NAME')}", flush=True)
 for name in ("serial", "numpy", "yaml", "cv2", "Jetson.GPIO"):
     try:
         module = importlib.import_module(name)
-        print(f"[OK] {name} version={getattr(module, '__version__', 'unknown')} file={getattr(module, '__file__', 'unknown')}", flush=True)
+        version = getattr(module, '__version__', getattr(module, 'VERSION', 'unknown'))
+        print(f"[OK] {name} version={version} file={getattr(module, '__file__', 'unknown')}", flush=True)
+        if name == "Jetson.GPIO":
+            print(f"[GPIO] actual_board={getattr(module, 'JETSON_INFO', 'unknown')}", flush=True)
     except Exception:
         failed.append(name)
         print(f"[ERROR] Import failed: {name}", flush=True)
