@@ -46,7 +46,8 @@ class FlightRecorder:
         if event in {"state", "phase", "exception", "ready", "resume_denied", "shutdown", "handshake",
                      "legacy_button_limit", "legacy_initial_speed_ignored", "legacy_instant_stop",
                      "legacy_stop_acknowledged", "legacy_stop_UP_consumed",
-                     "user_instant_stop_request"}:
+                     "user_instant_stop_request", "uart_open", "uart_status_source", "uart_health",
+                     "startup_step", "runtime_health", "loop_exit", "ultrasonic_exception", "gpio_setup", "gpio_cleanup"}:
             print(json.dumps(json_safe(record), ensure_ascii=False), flush=True)
 
     def close(self):

@@ -667,6 +667,10 @@ class FullRunController:
         return self.command
 
     def snapshot(self, now):
+        corridor = [(d * math.cos(a), d * math.sin(a)) for a, d in self.points
+                    if d * math.cos(a) > 0.01
+                    and abs(d * math.sin(a)) <= self.c.robot_width_m / 2 + self.c.rear_safety_margin_m]
+        nearest = min(corridor, default=None, key=lambda point: point[0])
         return {"state": self.state, "phase": self.phase, "reason": self.reason,
                 "mcu_protocol": self.mcu_protocol,
                 "odometry_source": "encoder_counts" if self.status and self.status.left_counts is not None else "reported_RPM_integral",
@@ -677,7 +681,26 @@ class FullRunController:
                            "MCU_status": None if self.status_stamp is None else now - self.status_stamp},
                 "sides": {k: asdict(v) for k, v in self.sides.items()}, "front_m": self.front,
                 "front_bumper_clearance_m": self.front_clearance_m(),
+                "health_errors": self.health_errors(now), "fault_reason": self.fault_reason,
+                "clearance_evidence": {"nearest_front_corridor_point_xy_m": nearest,
+                                       "points_inside_configured_body": sum(
+                                           abs(d * math.cos(a)) <= self.c.robot_length_m / 2
+                                           and abs(d * math.sin(a)) <= self.c.robot_width_m / 2 for a, d in self.points),
+                                       "left_lidar_m": self.lateral_clearance("left"),
+                                       "right_lidar_m": self.lateral_clearance("right"),
+                                       "resume_blocker": self.blocking_reason(resume=True)},
                 "inside": self.inside, "baseline_m": self.baseline_value, "side_seen": self.side_seen,
+                "baseline_samples": len(self.baseline), "near_samples": self.near_samples,
+                "seen_at": self.seen_at, "pass_start": self.pass_start,
+                "rear_progress_m": None if self.tail_at is None else self.odom.distance_travelled_m - self.tail_at,
+                "rear_required_m": self.c.rear_clearance_m,
+                "last_side_stamp": self.last_side_stamp,
+                "pending_up": self.pending_up, "resume_up_floor": self.resume_up_floor,
+                "motion_expected_since": self.motion_expected_since,
+                "no_progress_age_s": now - self.progress_at,
+                "frozen_target_world": self.target_world,
+                "lane_y_m": self.lane_y, "turn_left": self.turn_left,
+                "saved_path": asdict(self.follower.path) if self.follower else None,
                 "clear_count": self.clear_count, "tail_at": self.tail_at, "tail_x_m": self.tail_x_m,
                 "active_s": self.active_s, "follower_progress": self.follower.progress_ratio if self.follower else None,
                 "target": asdict(self.target) if self.target else None,

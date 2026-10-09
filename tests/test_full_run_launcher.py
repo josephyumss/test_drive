@@ -59,6 +59,11 @@ if name=='python-stub':
     if any(a.endswith('full_run_diagnostics.py') for a in args):
         event('AUTO_BUNDLE')
         os.execv('/usr/bin/python3', ['/usr/bin/python3', *args])
+    if any(a.endswith('full_run_environment.py') for a in args):
+        os.execv('/usr/bin/python3', ['/usr/bin/python3', *args])
+    if any(a.endswith('full_run_requirements.py') for a in args):
+        print('{"checks": [], "failed": []}')
+        sys.exit(0)
     if '-c' in args or '--version' in args or '--check-config' in args:
         sys.stdin.read() if not sys.stdin.isatty() and '-c' in args else None
         sys.exit(0)
@@ -94,9 +99,12 @@ class FullRunLauncherTests(unittest.TestCase):
                      "jetson/amr_core/full_run.py", "jetson/amr_core/reactive_avoidance.py",
                      "jetson/amr_core/full_run_log.py", "jetson/amr_core/full_run_ultrasonic.py",
                      "jetson/amr_core/full_run_legacy.py", "jetson/amr_core/full_run_user_stop.py",
+                     "jetson/amr_core/full_run_uart.py", "jetson/amr_core/full_run_environment.py",
+                     "jetson/amr_core/full_run_summary.py",
                      "jetson/amr_core/ascii_serial_bridge.py", "jetson/amr_core/serial_bridge.py",
                      "jetson/amr_core/transport.py", "jetson/amr_core/packet.py", "jetson/amr_core/crc16.py",
                      "protocol/protocol_constants.py", "scripts/full_run_user_stop.py", "scripts/full_run_setup_steps.sh",
+                     "scripts/full_run_requirements.py",
                      "docker/oak_yolo_udp.py", "jetson_ws/src/amr_vision/amr_vision/yolo_udp_bridge_node.py",
                      "jetson_ws/src/amr_vision/config/yolo.yaml",
                      "stm32/Core/Src/main.c", "stm32/Core/Inc/full_run_control.h"):
@@ -107,6 +115,8 @@ class FullRunLauncherTests(unittest.TestCase):
         shutil.copyfile(ROOT / "scripts/full_run_log_access.sh", self.root / "scripts/full_run_log_access.sh")
         shutil.copyfile(ROOT / "scripts/full_run_diagnostics.py", self.root / "scripts/full_run_diagnostics.py")
         shutil.copyfile(ROOT / "jetson/amr_core/full_run_diagnostics.py", self.root / "jetson/amr_core/full_run_diagnostics.py")
+        for module in ("full_run_environment.py", "full_run_summary.py"):
+            shutil.copyfile(ROOT / "jetson/amr_core" / module, self.root / "jetson/amr_core" / module)
         (self.root / "scripts/full_run_controller.py").touch()
         (self.root / "scripts/start_yolo_docker.sh").write_text(f'#!/bin/bash\nexec "{self.bin / "yolo-stub"}"\n')
         source = (ROOT / "scripts/start_full_run.sh").read_text().replace("/dev/bus/usb", str(self.root / "usb"))
@@ -152,7 +162,15 @@ class FullRunLauncherTests(unittest.TestCase):
         args = next(v for v in events if v.startswith("ARGS "))
         self.assertIn("--preflight-only", args)
         self.assertIn("--status-port", args)
+        self.assertNotIn("--no-command-status-fallback", args)
         self.assertNotIn("--open-loop", args)
+        self.check_stopped(events)
+
+    def test_configured_status_only_override_reaches_controller(self):
+        result, events = self.run_launcher("--preflight-only", MCU_STATUS_COMMAND_FALLBACK="0")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        args = next(v for v in events if v.startswith("ARGS "))
+        self.assertIn("--no-command-status-fallback", args)
         self.check_stopped(events)
 
     def test_check_never_starts_or_sends_commands(self):
@@ -206,7 +224,10 @@ class FullRunLauncherTests(unittest.TestCase):
                                     text=True, timeout=15)
             self.assertEqual(result.returncode, 0, result.stdout)
             self.assertEqual(process.wait(timeout=10), 0)
-            self.assertEqual(archives[0].read_bytes(), original)
+            import tarfile
+            with tarfile.open(archives[0]) as final_archive:
+                preserved = next(n for n in final_archive.getnames() if n.endswith("/first_fault-debug.tar.gz"))
+                self.assertEqual(final_archive.extractfile(preserved).read(), original)
         finally:
             if process.poll() is None:
                 process.terminate()

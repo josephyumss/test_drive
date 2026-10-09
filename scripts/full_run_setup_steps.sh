@@ -107,6 +107,8 @@ source_snapshot() {
     mkdir -p "$FULL_RUN_SETUP_LOG_DIR/source"
     local source_file
     for source_file in scripts/setup_full_run.sh scripts/full_run_setup_steps.sh scripts/full_run_log_access.sh scripts/download_models.sh \
+        scripts/full_run_diagnostics.py jetson/amr_core/full_run_diagnostics.py \
+        jetson/amr_core/full_run_environment.py jetson/amr_core/full_run_summary.py \
         scripts/build_yolo_docker.sh docker/Dockerfile.oak-yolo config/full_run.json; do
         mkdir -p "$FULL_RUN_SETUP_LOG_DIR/source/$(dirname "$source_file")"
         cp "$PROJECT_DIR/$source_file" "$FULL_RUN_SETUP_LOG_DIR/source/$source_file"
@@ -170,7 +172,7 @@ ros_bridge_build() {
     require_ros
     if [[ -f "$PROJECT_DIR/jetson_ws/install/setup.bash" ]] && verify_ros_bridge \
         > "$FULL_RUN_SETUP_LOG_DIR/ros_bridge_reuse_probe.log" 2>&1; then
-        already 'Existing ROS bridge imports passed.'
+        already 'Existing ROS bridge imports and installed-source identity passed.'
     fi
     as_user /bin/bash -c '
         set -Ee -o pipefail
@@ -260,8 +262,9 @@ verify_ros_bridge() {
         source /opt/ros/humble/setup.bash
         source "$1/jetson_ws/install/setup.bash"
         export PYTHONPATH="$1${PYTHONPATH:+:$PYTHONPATH}"
-        "$2" - <<"PY"
-import importlib, sys, traceback
+        "$2" - "$1" <<"PY"
+import hashlib, importlib, sys, traceback
+from pathlib import Path
 failed = []
 for name in ("rclpy", "serial", "sensor_msgs.msg:LaserScan", "std_msgs.msg:String",
              "amr_interfaces.msg:ObstacleInfo", "amr_vision.yolo_udp_bridge_node"):
@@ -270,7 +273,16 @@ for name in ("rclpy", "serial", "sensor_msgs.msg:LaserScan", "std_msgs.msg:Strin
         module = importlib.import_module(module_name)
         if attribute:
             getattr(module, attribute)
-        print(f"[OK] {name}", flush=True)
+        module_file = getattr(module, "__file__", None)
+        print(f"[OK] {name} file={module_file}", flush=True)
+        if module_name == "amr_vision.yolo_udp_bridge_node":
+            actual = Path(module.__file__).resolve()
+            expected = Path(sys.argv[1]) / "jetson_ws/src/amr_vision/amr_vision/yolo_udp_bridge_node.py"
+            actual_hash = hashlib.sha256(actual.read_bytes()).hexdigest()
+            expected_hash = hashlib.sha256(expected.read_bytes()).hexdigest()
+            print(f"[BRIDGE SOURCE] actual={actual} sha256={actual_hash} expected={expected} sha256={expected_hash}", flush=True)
+            if actual_hash != expected_hash:
+                raise RuntimeError("Installed ROS bridge differs from this checkout; rebuild required")
     except Exception:
         failed.append(name)
         print(f"[ERROR] Import failed: {name}", flush=True)

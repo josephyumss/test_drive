@@ -11,6 +11,18 @@ from .ascii_serial_bridge import decode_ascii_status
 from .full_run import ControlStatus
 
 
+def validate_legacy_status(line):
+    """Validate without changing button state (also used during RX discovery)."""
+    raw = decode_ascii_status(line)
+    if (not 0 <= raw.base_rpm <= 65 or raw.base_rpm % 5
+            or not 0 <= raw.sharp_adc <= 65535
+            or any(not 0 <= value <= 65 for value in (raw.left_target_rpm, raw.right_target_rpm))
+            or max(abs(raw.left_rpm), abs(raw.right_rpm)) > 1000
+            or max(raw.left_pwm, raw.right_pwm) > 65535):
+        raise ValueError("Invalid legacy STATUS ranges or non-5-RPM base step")
+    return raw
+
+
 class LegacyControlAdapter:
     def __init__(self, session, maximum_rpm=20, emit=None):
         self.session = session  # Local identifier only, NOT acknowledged by MCU.
@@ -34,13 +46,7 @@ class LegacyControlAdapter:
                   stop_count=self.stop_count)
 
     def decode(self, line, now, *, allow_controls=True):
-        raw = decode_ascii_status(line)
-        if (not 0 <= raw.base_rpm <= 65 or raw.base_rpm % 5
-                or not 0 <= raw.sharp_adc <= 65535
-                or any(not 0 <= value <= 65 for value in (raw.left_target_rpm, raw.right_target_rpm))
-                or max(abs(raw.left_rpm), abs(raw.right_rpm)) > 1000
-                or max(raw.left_pwm, raw.right_pwm) > 65535):
-            raise ValueError("Invalid legacy STATUS ranges or non-5-RPM base step")
+        raw = validate_legacy_status(line)
         previous = self.raw
         self.raw = raw
         if self.first_stamp is None:

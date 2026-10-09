@@ -34,11 +34,13 @@ trap 'code=$?; echo "[FAIL] exit=$code line=$LINENO command=$BASH_COMMAND"' ERR
 # archived. This helper imports only Python's standard library.
 auto_bundle_on_exit() {
     local result="$1" reason="${2:-launcher_exit_$1}" interpreter="${PYTHON_BIN:-/usr/bin/python3}"
+    local -a bundle_options=(--auto-bundle --capture-environment)
+    [[ "${3:-}" != finalize ]] || bundle_options+=(--finalize-bundle)
     if (( result != 0 )) || [[ -f "$LOG_DIR/auto_bundle.request.json" ]]; then
         if ! command -v "$interpreter" >/dev/null 2>&1; then interpreter=/usr/bin/python3; fi
         echo "[BUNDLE] Automatic diagnostics: $reason"
         if "$interpreter" "$PROJECT_DIR/scripts/full_run_diagnostics.py" "$LOG_DIR" \
-            --auto-bundle --reason "$reason" >> "$LOG_DIR/bundle.log" 2>&1; then
+            "${bundle_options[@]}" --reason "$reason" >> "$LOG_DIR/bundle.log" 2>&1; then
             echo "[BUNDLE] Saved: $LOG_ROOT/$(basename "$LOG_DIR")-debug.tar.gz"
         else
             echo "[BUNDLE FAIL] Original logs kept at $LOG_DIR; see bundle.log."
@@ -70,8 +72,14 @@ MCU_DEVICE="${MCU_DEVICE:-/dev/ttyTHS1}"
 MCU_STATUS_DEVICE="${MCU_STATUS_DEVICE:-/dev/ttyTHS2}"
 MCU_BAUDRATE="${MCU_BAUDRATE:-115200}"
 MCU_PROTOCOL="${MCU_PROTOCOL:-legacy}"
+MCU_STATUS_COMMAND_FALLBACK="${MCU_STATUS_COMMAND_FALLBACK:-1}"
+[[ "$MCU_STATUS_COMMAND_FALLBACK" == 0 || "$MCU_STATUS_COMMAND_FALLBACK" == 1 ]] || {
+    echo '[FAIL] MCU_STATUS_COMMAND_FALLBACK must be 0 or 1' >&2; exit 1;
+}
 LIDAR_DEVICE="${LIDAR_DEVICE:-/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0}"
 FULL_RUN_CONFIG="${FULL_RUN_CONFIG:-$PROJECT_DIR/config/full_run.json}"
+export MCU_DEVICE MCU_STATUS_DEVICE MCU_BAUDRATE MCU_PROTOCOL MCU_STATUS_COMMAND_FALLBACK
+export LIDAR_DEVICE FULL_RUN_CONFIG ROS_SETUP JETSON_SETUP
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}" ROS_LOCALHOST_ONLY="${ROS_LOCALHOST_ONLY:-0}"
 export PYTHONPATH="$PROJECT_DIR${PYTHONPATH:+:$PYTHONPATH}" PYTHONUNBUFFERED=1
 # This project's board is Orin Nano/Super, as in the existing fused launchers.
@@ -87,31 +95,51 @@ if [[ -z "${LIDAR_SETUP:-}" ]]; then
         LIDAR_SETUP="$PROJECT_DIR/.runtime/ldlidar_ros2_ws/install/setup.bash"
     fi
 fi
+export LIDAR_SETUP
 fail() { echo "[FAIL] $*" >&2; exit 1; }
+check_errors=0
+check_fail() { echo "[CHECK FAIL] $*" >&2; check_errors=$((check_errors + 1)); }
+# Collect before dependency checks: a missing device/import must not prevent
+# evidence of OTHER independent problems from reaching the automatic bundle.
+environment_python="$PYTHON_BIN"
+command -v "$environment_python" >/dev/null 2>&1 || environment_python=/usr/bin/python3
+if ! "$environment_python" "$PROJECT_DIR/jetson/amr_core/full_run_environment.py" "$PROJECT_DIR" \
+    > "$LOG_DIR/environment-start.json" 2> "$LOG_DIR/environment-start.log"; then
+    echo '[WARN] Detailed startup inventory failed; see environment-start.log. Continuing required checks.'
+fi
 for program in "$PYTHON_BIN" docker setsid flock fuser; do
-    command -v "$program" >/dev/null || fail "Missing executable: $program"
+    command -v "$program" >/dev/null || check_fail "Missing executable: $program"
 done
 for file in "$ROS_SETUP" "$JETSON_SETUP" "$LIDAR_SETUP" "$FULL_RUN_CONFIG"; do
-    [[ -r "$file" ]] || fail "Missing/unreadable configuration or workspace: $file"
+    [[ -r "$file" ]] || check_fail "Missing/unreadable configuration or workspace: $file"
 done
 for device in "$MCU_DEVICE" "$MCU_STATUS_DEVICE" "$LIDAR_DEVICE"; do
-    [[ -r "$device" && -w "$device" ]] || fail "Missing or inaccessible device: $device. Existing STM32 STATUS must reach the configured RX port."
+    [[ -r "$device" && -w "$device" ]] || check_fail "Missing or inaccessible device: $device. Existing STM32 STATUS must reach the configured RX port."
 done
-[[ -d /dev/bus/usb ]] || fail 'Camera USB devices not present'
-[[ -s "$PROJECT_DIR/models/yolo11n.pt" ]] || fail 'Missing models/yolo11n.pt; run setup_yolo_lidar_path_avoidance.sh'
+[[ -d /dev/bus/usb ]] || check_fail 'Camera USB devices not present'
+[[ -s "$PROJECT_DIR/models/yolo11n.pt" ]] || check_fail 'Missing models/yolo11n.pt; run setup_yolo_lidar_path_avoidance.sh'
 set +u
-source "$ROS_SETUP"
-source "$JETSON_SETUP"
-source "$LIDAR_SETUP"
+for file in "$ROS_SETUP" "$JETSON_SETUP" "$LIDAR_SETUP"; do
+    [[ ! -r "$file" ]] || source "$file"
+done
 set -u
-"$PYTHON_BIN" "$PROJECT_DIR/scripts/full_run_controller.py" --config "$FULL_RUN_CONFIG" --log-dir "$LOG_DIR" --check-config
-"$PYTHON_BIN" -c 'import serial, rclpy, Jetson.GPIO; from sensor_msgs.msg import LaserScan; from std_msgs.msg import String; from amr_interfaces.msg import ObstacleInfo'
-ros2 pkg prefix ldlidar_stl_ros2
-ros2 pkg prefix amr_vision
-docker info --format '{{json .Runtimes}}' | "$PYTHON_BIN" -c 'import json,sys; assert "nvidia" in json.load(sys.stdin), "NVIDIA container runtime missing"'
-docker image inspect socialguide-amr-oak-yolo:jp6 --format '{{.Id}}'
-[[ "$MCU_PROTOCOL" == legacy || "$MCU_PROTOCOL" == ctrl ]] || fail 'MCU_PROTOCOL must be legacy (existing firmware) or ctrl (optional extended firmware).'
-echo "[INFO] command=$MCU_DEVICE status=$MCU_STATUS_DEVICE lidar=$LIDAR_DEVICE mode=$MODE protocol=$MCU_PROTOCOL"
+if command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+    "$PYTHON_BIN" "$PROJECT_DIR/scripts/full_run_controller.py" --config "$FULL_RUN_CONFIG" --log-dir "$LOG_DIR" --check-config \
+        || check_fail 'Full-run configuration validation failed'
+    "$PYTHON_BIN" "$PROJECT_DIR/scripts/full_run_requirements.py" > "$LOG_DIR/imports.json" 2> "$LOG_DIR/imports.log" \
+        || check_fail 'Python/ROS/GPIO imports or installed-source identity failed; see imports.json and imports.log'
+fi
+for package in ldlidar_stl_ros2 amr_vision; do
+    ros2 pkg prefix "$package" || check_fail "ROS package unavailable: $package"
+done
+if command -v docker >/dev/null 2>&1; then
+    docker info --format '{{json .Runtimes}}' | "$PYTHON_BIN" -c 'import json,sys; assert "nvidia" in json.load(sys.stdin), "NVIDIA container runtime missing"' \
+        || check_fail 'Docker daemon/NVIDIA runtime check failed'
+    docker image inspect socialguide-amr-oak-yolo:jp6 --format '{{.Id}}' || check_fail 'YOLO Docker image unavailable'
+fi
+[[ "$MCU_PROTOCOL" == legacy || "$MCU_PROTOCOL" == ctrl ]] || check_fail 'MCU_PROTOCOL must be legacy or ctrl'
+(( check_errors == 0 )) || fail "$check_errors independent startup checks failed. No robot processes were started."
+echo "[INFO] command=$MCU_DEVICE status=$MCU_STATUS_DEVICE command_RX_fallback=$MCU_STATUS_COMMAND_FALLBACK lidar=$LIDAR_DEVICE mode=$MODE protocol=$MCU_PROTOCOL"
 echo '[INFO] Default legacy uses existing $CMD/$STATUS, without a firmware update. Live status RX is required; no open-loop fallback.'
 [[ "$MODE" != --check ]] || { echo '[CHECK] Installation/configuration passed; live sensors and firmware not checked.'; exit 0; }
 
@@ -136,10 +164,11 @@ PY
 ln -sfn "$LOG_DIR" "$LOG_ROOT/latest"
 cp "$FULL_RUN_CONFIG" "$LOG_DIR/config.json"
 tar -czf "$LOG_DIR/source.tar.gz" -C "$PROJECT_DIR" \
-    scripts/start_full_run.sh scripts/stop_full_run.sh scripts/full_run_controller.py scripts/full_run_user_stop.py \
+    scripts/start_full_run.sh scripts/stop_full_run.sh scripts/full_run_controller.py scripts/full_run_user_stop.py scripts/full_run_requirements.py \
     scripts/full_run_log_access.sh scripts/full_run_setup_steps.sh \
     jetson/amr_core/full_run.py jetson/amr_core/full_run_log.py \
-    jetson/amr_core/full_run_legacy.py jetson/amr_core/full_run_user_stop.py jetson/amr_core/ascii_serial_bridge.py \
+    jetson/amr_core/full_run_environment.py jetson/amr_core/full_run_summary.py \
+    jetson/amr_core/full_run_legacy.py jetson/amr_core/full_run_user_stop.py jetson/amr_core/full_run_uart.py jetson/amr_core/ascii_serial_bridge.py \
     jetson/amr_core/serial_bridge.py jetson/amr_core/transport.py jetson/amr_core/packet.py \
     jetson/amr_core/crc16.py protocol/protocol_constants.py \
     jetson/amr_core/full_run_ultrasonic.py jetson/amr_core/reactive_avoidance.py \
@@ -156,6 +185,32 @@ sha256sum "$PROJECT_DIR"/scripts/*full_run* "$PROJECT_DIR"/jetson/amr_core/full_
     cat /etc/os-release
     id
     ls -l "$MCU_DEVICE" "$MCU_STATUS_DEVICE" "$LIDAR_DEVICE"
+    # Read-only mapping evidence. Do not change pinmux/getty or probe other
+    # serial devices: the active MCU ports are the only permitted RX sources.
+    for uart_device in "$MCU_DEVICE" "$MCU_STATUS_DEVICE"; do
+        printf 'UART requested=%s resolved=' "$uart_device"
+        uart_resolved="$(readlink -f "$uart_device")" || uart_resolved="$uart_device"
+        printf '%s\n' "$uart_resolved"
+        uart_name="${uart_resolved##*/}"
+        for uart_metadata in /sys/class/tty/"$uart_name"/device \
+            /sys/class/tty/"$uart_name"/device/driver /sys/class/tty/"$uart_name"/device/of_node; do
+            printf 'UART sysfs %s: ' "$uart_metadata"
+            readlink -f "$uart_metadata" || true
+        done
+        if command -v timeout >/dev/null 2>&1; then
+            if command -v udevadm >/dev/null 2>&1; then
+                timeout 3s udevadm info --query=property --name="$uart_device" || true
+            fi
+            if command -v systemctl >/dev/null 2>&1; then
+                printf 'UART console unit serial-getty@%s.service: ' "$uart_name"
+                timeout 3s systemctl is-active "serial-getty@$uart_name.service" || true
+            fi
+        fi
+    done
+    if command -v timeout >/dev/null 2>&1 && command -v systemctl >/dev/null 2>&1; then
+        printf 'Jetson console unit nvgetty.service: '
+        timeout 3s systemctl is-active nvgetty.service || true
+    fi
     "$PYTHON_BIN" --version
     docker version
     df -h "$LOG_DIR"
@@ -187,6 +242,7 @@ cleanup() {
         fi
         wait "$controller_pid"
         controller_result=$?
+        echo "[CHILD EXIT] name=controller pid=$controller_pid exit=$controller_result phase=cleanup"
         (( controller_result >= 128 )) && forced=1
     fi
     # UART owner has exited. This cannot race the live controller or clear a
@@ -196,12 +252,22 @@ import serial, sys, time, traceback
 try:
     with serial.Serial(sys.argv[1], int(sys.argv[2]), timeout=0, write_timeout=0.15, exclusive=True) as uart:
         for _ in range(3):
-            uart.write(b'$CMD,0,0,1\r\n')
+            stop_command = b'$CMD,0,0,1\r\n'
+            written = uart.write(stop_command)
+            if written != len(stop_command):
+                raise IOError(f'Short fallback stop write: {written}/{len(stop_command)}')
             time.sleep(0.02)
     print('Fallback stop/brake commands sent')
 except Exception:
     traceback.print_exc()
+    sys.exit(1)
 PY
+    shutdown_result=$?
+    echo "[FALLBACK STOP] exit=$shutdown_result; successful writes do not prove MCU receipt"
+    if (( shutdown_result != 0 )); then
+        result=1
+        failure_reason="${failure_reason}_fallback_stop_failed"
+    fi
     for pid in "${sensor_pids[@]}"; do kill -TERM -- "-$pid" 2>/dev/null; done
     if (( yolo_owned )); then
         owner="$(docker container inspect socialguide-amr-yolo --format '{{index .Config.Labels "amr.full_run.owner"}}' 2>/dev/null)"
@@ -215,6 +281,7 @@ PY
         for _ in {1..20}; do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
         kill -KILL -- "-$pid" 2>/dev/null
         wait "$pid"
+        echo "[CHILD EXIT] pid=$pid exit=$? phase=cleanup"
     done
     rm -f -- "$RUN_DIR/full_run.pid"
     echo "[STOP] exit=$result forced=$forced logs=$LOG_DIR"
@@ -223,9 +290,9 @@ PY
     # if it failed. Successful automatic captures never get overwritten.
     if [[ -n "$diagnostics_pid" ]]; then wait "$diagnostics_pid"; fi
     if (( forced && result == 0 )); then
-        auto_bundle_on_exit 1 forced_controller_shutdown
+        auto_bundle_on_exit 1 forced_controller_shutdown finalize
     else
-        auto_bundle_on_exit "$result" "$failure_reason"
+        auto_bundle_on_exit "$result" "$failure_reason" finalize
     fi
     exit "$result"
 }
@@ -240,6 +307,7 @@ args=(--config "$FULL_RUN_CONFIG" --port "$MCU_DEVICE" --status-port "$MCU_STATU
       --user-stop-file "$RUN_DIR/full_run.user_stop.json" \
       --supervisor-start-ticks "$(awk '{print $22}' "/proc/$$/stat")")
 [[ "$MODE" != --preflight-only ]] || args+=(--preflight-only)
+[[ "$MCU_STATUS_COMMAND_FALLBACK" != 0 ]] || args+=(--no-command-status-fallback)
 setsid "$PYTHON_BIN" -u "$PROJECT_DIR/scripts/full_run_controller.py" "${args[@]}" \
     > "$LOG_DIR/controller.log" 2>&1 9>&- &
 controller_pid=$!
@@ -260,7 +328,7 @@ while kill -0 "$controller_pid" 2>/dev/null; do
     if [[ -z "$diagnostics_pid" && -f "$LOG_DIR/auto_bundle.request.json" ]]; then
         echo '[BUNDLE] Fault detected; saving diagnostics in the background.'
         "$PYTHON_BIN" "$PROJECT_DIR/scripts/full_run_diagnostics.py" "$LOG_DIR" \
-            --auto-bundle >> "$LOG_DIR/bundle.log" 2>&1 9>&- &
+            --auto-bundle --capture-environment >> "$LOG_DIR/bundle.log" 2>&1 9>&- &
         diagnostics_pid=$!
     fi
     if [[ -n "$diagnostics_pid" ]] && (( diagnostics_reported == 0 )) && ! kill -0 "$diagnostics_pid" 2>/dev/null; then

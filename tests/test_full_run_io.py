@@ -53,6 +53,10 @@ class EchoTests(unittest.TestCase):
         worker.echo_done = threading.Event()
         worker.active_echo = worker.rise_ns = worker.fall_ns = None
         worker.pins = {"left": (33, 31)}
+        worker.stats = {"left": {"triggers": 0, "rising_edges": 0, "falling_edges": 0,
+                                 "edge_callbacks": 0, "ignored_edges": 0}}
+        worker.edge_error = None
+        worker.emit = lambda *_args, **_kwargs: None
         def output(_pin, value):
             if generate:
                 levels[31] = value
@@ -83,11 +87,15 @@ class EchoTests(unittest.TestCase):
 
 class AdapterTests(unittest.TestCase):
     def run_preflight(self, firmware=True, fail_write=False, protocol="ctrl", raw_base=0, same_port=False,
-                      live_stop_cycle=None, resume_after_stop=False, initial_emergency=False):
+                      live_stop_cycle=None, resume_after_stop=False, initial_emergency=False,
+                      status_on_command=False, command_status_fallback=True, fail_cleanup=False,
+                      fail_uart_open=False, fail_shutdown_write=False):
         uarts = []
         captured = {}
         class Uart:
             def __init__(self, *_args, **_kwargs):
+                if fail_uart_open:
+                    raise PermissionError("simulated UART permission error")
                 self.incoming = bytearray()
                 self.writes = []
                 self.closed = False
@@ -103,18 +111,22 @@ class AdapterTests(unittest.TestCase):
                 return result
             def write(self, data):
                 self.writes.append(data)
+                if fail_shutdown_write and data == b"$CMD,0,0,1\r\n":
+                    raise OSError("simulated shutdown UART failure")
                 if fail_write and data.startswith(b"$CMD") and data.endswith(b",0\r\n"):
                     raise OSError("simulated UART write failure")
                 if data.startswith(b"$FULL,") and firmware:
                     session = int(data.decode().strip().split(",")[1])
-                    uarts[1].incoming.extend(f"$CTRL,1,{session},0,0,0,0,0,0,0,0,1000\r\n".encode())
+                    (uarts[0] if status_on_command else uarts[-1]).incoming.extend(
+                        f"$CTRL,1,{session},0,0,0,0,0,0,0,0,1000\r\n".encode())
                 elif protocol == "legacy" and firmware and data.startswith(b"$CMD"):
                     base = raw_base
                     if live_stop_cycle is not None:
                         cycle = captured.get("cycle", 0)
                         base = 0 if cycle <= 2 else (15 if resume_after_stop and cycle >= 6 else 10)
                     emergency = int(initial_emergency and len(self.writes) == 1)
-                    uarts[-1].incoming.extend(f"$STATUS,{base},1234,45,0,0,0,0,0,0,{emergency}\r\n".encode())
+                    (uarts[0] if status_on_command else uarts[-1]).incoming.extend(
+                        f"$STATUS,{base},1234,45,0,0,0,0,0,0,{emergency}\r\n".encode())
                 return len(data)
             def close(self):
                 self.closed = True
@@ -124,6 +136,8 @@ class AdapterTests(unittest.TestCase):
                 self.inside = None
                 captured["worker"] = self
             def close(self):
+                if fail_cleanup:
+                    raise RuntimeError("simulated GPIO cleanup failure")
                 pass
         def make_node(config, core, recorder):
             captured["core"] = core
@@ -141,7 +155,7 @@ class AdapterTests(unittest.TestCase):
         serial = types.ModuleType("serial")
         serial.Serial = Uart
         ros = types.ModuleType("rclpy")
-        ros.init = ros.shutdown = lambda: None
+        ros.init = ros.try_shutdown = lambda: None
         ros.ok = lambda: live_stop_cycle is None or captured.get("cycle", 0) < 10
         ros.spin_once = spin_once
         jetson = types.ModuleType("Jetson")
@@ -175,6 +189,8 @@ class AdapterTests(unittest.TestCase):
                                   "--user-stop-file", str(Path(folder) / "stop.json")]
                 if protocol != "legacy":
                     arguments += ["--mcu-protocol", protocol]
+                if not command_status_fallback:
+                    arguments += ["--no-command-status-fallback"]
                 result = adapter.main(arguments)
             records = [json.loads(line) for line in (Path(folder) / "events.jsonl").read_text().splitlines()]
             captured["automatic_request"] = (Path(folder) / "auto_bundle.request.json").exists()
@@ -219,6 +235,63 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(result, 0, records)
         self.assertEqual(len(uarts), 1)
         self.assertTrue(uarts[0].closed)
+
+    def test_legacy_status_on_command_RX_passes_without_firmware_update_or_motion(self):
+        result, uarts, records = self.run_preflight(protocol="legacy", status_on_command=True)
+        self.assertEqual(result, 0, records)
+        sources = [r for r in records if r["event"] == "uart_status_source"]
+        self.assertEqual(len(sources), 1)
+        self.assertEqual(sources[0]["port"], "commands")
+        self.assertTrue(sources[0]["fallback"])
+        self.assertTrue(all(m.startswith(b"$CMD,0,0,") for m in uarts[0].writes))
+        self.assertFalse(uarts[1].writes)
+        self.assertFalse(self.automatic_request)
+
+    def test_UART_open_failure_records_exact_stage_and_requests_automatic_bundle(self):
+        result, uarts, records = self.run_preflight(protocol="legacy", fail_uart_open=True)
+        self.assertEqual(result, 1)
+        errors = [r for r in records if r["event"] == "exception"]
+        self.assertEqual(errors[0]["startup_stage"], "open_command_UART")
+        self.assertIn("PermissionError", errors[0]["traceback"])
+        self.assertEqual(uarts, [])
+        self.assertTrue(self.automatic_request)
+
+    def test_cleanup_failure_cannot_be_reported_as_success(self):
+        result, uarts, records = self.run_preflight(protocol="legacy", fail_cleanup=True)
+        self.assertEqual(result, 1)
+        self.assertTrue(any(r.get("context") == "gpio" for r in records))
+        self.assertTrue(all(u.closed for u in uarts))
+        self.assertTrue(self.automatic_request)
+
+    def test_shutdown_UART_error_records_trace_and_does_not_skip_other_cleanup(self):
+        result, uarts, records = self.run_preflight(protocol="legacy", fail_shutdown_write=True)
+        self.assertEqual(result, 1)
+        self.assertTrue(any(r.get("context") == "shutdown_stop" for r in records))
+        self.assertTrue(all(u.closed for u in uarts))
+        self.assertTrue(self.automatic_request)
+
+    def test_command_RX_fallback_can_be_disabled_and_missing_status_still_faults(self):
+        result, uarts, records = self.run_preflight(protocol="legacy", status_on_command=True,
+                                                   command_status_fallback=False)
+        self.assertEqual(result, 1)
+        self.assertTrue(all(m.startswith(b"$CMD,0,0,") for m in uarts[0].writes))
+        self.assertFalse(any(r["event"] == "uart_status_source" for r in records))
+        health = [r for r in records if r["event"] == "uart_health"][-1]
+        self.assertEqual(list(health["ports"]), ["status"])
+        self.assertEqual(health["ports"]["status"]["rx_bytes"], 0)
+        self.assertTrue(self.automatic_request)
+
+    def test_no_RX_fault_records_both_ports_before_automatic_bundle(self):
+        result, uarts, records = self.run_preflight(protocol="legacy", firmware=False)
+        self.assertEqual(result, 1)
+        health_index = max(i for i, r in enumerate(records) if r["event"] == "uart_health")
+        bundle_index = next(i for i, r in enumerate(records) if r["event"] == "auto_bundle_requested")
+        self.assertLess(health_index, bundle_index)
+        health = records[health_index]
+        self.assertEqual(set(health["ports"]), {"commands", "status"})
+        self.assertTrue(all(p["rx_bytes"] == 0 for p in health["ports"].values()))
+        self.assertTrue(health["diagnosis"].startswith("no_RX_bytes_"))
+        self.assertTrue(all(m.startswith(b"$CMD,0,0,") for m in uarts[0].writes))
 
     def test_legacy_preflight_recovers_prior_shutdown_ESTOP_without_button_press(self):
         result, uarts, records = self.run_preflight(protocol="legacy", initial_emergency=True)

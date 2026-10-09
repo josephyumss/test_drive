@@ -25,6 +25,51 @@ GPIO chip labels and installed GPIO package metadata. GPIO detection/import
 failure still prevents starting the controller; no failed sensor is bypassed.
 Reference: https://github.com/NVIDIA/jetson-gpio/blob/v2.1.7/lib/python/Jetson/GPIO/gpio_pin_data.py
 
+2026-10-09 live preflight failure fix
+
+The later setup 20261009T113740Z-0pzaag finished successfully with no failed
+or blocked stages. Three received live preflights then failed at 90 seconds:
+startup_timeout:STM32_STATUS_missing_or_stale. In the latest run
+20261009T113754Z-KxcxEL, 4259 zero-RPM command frames were written, 876 LiDAR
+scans and 316 YOLO packets arrived, but no UART RX bytes/lines were recorded
+on the configured status port /dev/ttyTHS2. The old logs did not read command
+UART RX, so they cannot establish whether STATUS arrived at /dev/ttyTHS1.
+Successful Jetson writes do NOT prove that STM32 received the commands.
+
+Full run now also reads the RX side of the already-open command UART. Each
+port has its own bounded line buffer; only a fully validated expected status
+frame can select a source. The configured status port wins if both yield a
+valid frame in the same poll. Once selected, the source is locked until process
+exit: no hot switching, mixed button baselines or duplicate button events.
+No extra ports are opened, probes transmitted, baud rates/pinmux changed,
+firmware flashed or configuration silently rewritten. Set
+MCU_STATUS_COMMAND_FALLBACK=0 to disable command-port RX discovery.
+
+If neither owned UART receives bytes, there is still no usable feedback link.
+The actual STM32 status TX -> Jetson RX connection, common GND, MCU power and
+real receiving UART/pinmux must be checked on the robot. Software cannot fix an
+absent return wire or determine the specific physical cause from silence.
+Missing/stale status still causes zero motion, FAULT_STOP and an automatic
+bundle. Tests cover receiving valid existing STATUS on either port and the
+no-traffic failure case; physical UART/sensor operation remains unverified.
+
+uart_open, uart_status_source and uart_health now log serial settings, selected
+source, per-port received bytes/chunks/lines, invalid/other-protocol frames,
+bounded-buffer overflows and RX/valid-frame ages. Raw chunks/lines identify the
+source port. The first FAULT_STOP records these counters BEFORE requesting its
+automatic archive. Snapshots, exceptions and shutdown also include RX health;
+system.txt adds UART real paths, sysfs driver/device-tree mappings, udev metadata
+and console-service activity (read-only). Normal bridge SIGTERM shutdown now
+handles ExternalShutdownException and uses idempotent ROS context cleanup;
+real bridge errors are still propagated, not hidden.
+ROS shutdown reference: https://github.com/ros2/rclpy/blob/humble/rclpy/rclpy/__init__.py
+
+All 1443 ultrasonic samples in the latest run were NO_ECHO on both sides.
+This may mean open space OR a disconnected/misconfigured sensor; it is not
+evidence that the sensors are physically working. Before movement, place a
+known object in range of EACH sensor and confirm VALID distance readings.
+Do not reinterpret NO_ECHO as zero metres or as proof of obstacle clearance.
+
 Deployment prerequisites
 
 The default is now Jetson-only: MCU_PROTOCOL=legacy uses the already-deployed
@@ -50,6 +95,8 @@ STATUS means zero motion and an automatic diagnostic bundle, not open-loop mode.
    actual receiving port. It may equal MCU_DEVICE if its RX receives USART3 TX;
    both directions can use one Jetson UART. The MCU's TX/RX and Jetson's RX/TX
    pins must be identified on the actual board before changing a physical wire.
+   Default command-RX discovery also covers an existing STATUS return wire
+   on MCU_DEVICE, without changing that wiring or the configured device names.
 4. Side HC-SR04 sensors connect directly to the Jetson BOARD-numbered header:
    left TRIG=33 ECHO=31; right TRIG=7 ECHO=15. Existing level shifting must bring
    ECHO down to the Jetson's GPIO voltage. Confirm that these header pins are
@@ -298,14 +345,52 @@ Normal READY, user pause/instant stop, blocked-space pause, Ctrl+C and normal
 There is one automatic <UTC time>-<suffix>-debug.tar.gz per failed invocation
 in logs/full_run/. The path is printed as [BUNDLE] Saved in launcher.log.
 auto_bundle.request.json preserves the first reason; auto_bundle.status.json
-records successful completion. A completed automatic archive is preserved so
-later fault-state log rotation cannot overwrite the evidence of the first fault.
+records successful completion. While running, the first-fault archive is not
+refreshed. After motors and owned processes stop, the same archive is finalized
+once with final/cleanup logs AND the exact original archive nested inside as
+first_fault-debug.tar.gz. Send only the final outer *-debug.tar.gz; rotated logs
+cannot erase that nested first-fault evidence.
 Files are published atomically; incomplete compression is never presented as
 a completed archive. bundle_metadata.json records capture times and the exact
 prefix size captured from each live log. Original logs are never removed.
 If compression fails (for example, full disk), inspect bundle.log; shutdown
-retries a failed background capture. A successful capture is not repeated.
+retries a failed background capture. Failed finalization leaves the original
+archive intact. Repeated finalization does not wrap the archive repeatedly.
 The service allows 120 seconds for shutdown/compression; motors stop first.
+
+Additional diagnostic coverage
+
+Independent read-only startup file/device/configuration/import/ROS/Docker checks
+are attempted before deciding whether robot processes may start. imports.json
+records all import results/tracebacks and installed ROS bridge source hashes;
+setup rebuilds an outdated installed bridge rather than reusing old imports.
+environment-start.json is collected before checks; the separate bundler adds
+environment-fault.json/environment-shutdown.json, never in the heartbeat loop.
+These contain OS/board/package versions, allowlisted settings, UART paths/access/
+owners, memory/load/disk/USB, service state, Git revision/branch/dirty paths and
+bounded recent kernel/service journals. Each inventory command has a 2-second
+timeout. No private full_run.env, full process environment, Git credentials/
+remotes or camera images are collected. Review journal output before publishing.
+
+runtime_health adds camera/LiDAR received/valid/invalid counts, ROS publisher QoS,
+GPIO trigger/edge/VALID/NO_ECHO/FAULT counts, worker liveness and maximum control
+heartbeat gap/work time. startup_step identifies the failing initialization
+operation. GPIO setup/callback/measurement/cleanup and UART exceptions include
+full tracebacks; UART errors include the last attempted command. Cleanup failures
+return failure rather than successful preflight and request diagnostics. Service
+registration also has a full_run_setup/ attempt log and failure archive.
+
+Snapshots add UP/resume barriers, saved curves/frozen targets, baseline/near/
+clearance sample progress, required/measured rear travel and nearest corridor
+returns, including points inside the configured body. These are diagnostics:
+body returns are not masked, safety thresholds are not relaxed and sensor faults
+are not bypassed. Camera/bridge logs add startup phases, inference timing and
+frame/UDP/publish/error counts. Each Python bundle includes diagnostic_summary.json
+with streamed retained-record counts, latest status/snapshot, recent errors,
+sensor status distributions and all failed/blocked installation stages.
+Corrupt event records do not prevent preserving raw logs. Physical sensor/wire
+silence may remain ambiguous. Power loss/SIGKILL/full disk can prevent final
+capture; no claim of diagnosing every physical fault from software is made.
 
 Summary: python3 scripts/full_run_diagnostics.py
 Optional manual fresh snapshot: sudo python3 scripts/full_run_diagnostics.py --bundle

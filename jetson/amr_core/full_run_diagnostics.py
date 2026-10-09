@@ -36,7 +36,7 @@ def _read_request(folder):
         return {"request_read_error": str(exc)}
 
 
-def create_bundle(folder, *, automatic=False, reason="runtime_failure"):
+def create_bundle(folder, *, automatic=False, reason="runtime_failure", finalize=False):
     """Archive a stable prefix of each open log, then publish by atomic rename.
 
     File handles survive log rotation. Appends after a file is opened are not
@@ -54,15 +54,38 @@ def create_bundle(folder, *, automatic=False, reason="runtime_failure"):
         except (OSError, ValueError):
             status = {}
         if isinstance(status, dict) and status.get("complete") and destination.is_file():
-            return destination
+            if not finalize or status.get("finalized"):
+                return destination
+    else:
+        status = {}
     metadata = {"capture_started_utc": datetime.now(timezone.utc).isoformat(),
-                "automatic": automatic, "trigger": _read_request(folder),
+                "automatic": automatic, "finalized": finalize, "trigger": _read_request(folder),
                 "captured_files": {}, "skipped_files": {}}
     fd, temporary_name = tempfile.mkstemp(prefix=f".{folder.name}-debug-", suffix=".part", dir=folder.parent)
     os.close(fd)
     temporary = Path(temporary_name)
     try:
         with tarfile.open(temporary, "w:gz", compresslevel=1) as archive:
+            if finalize and destination.is_file() and status.get("complete"):
+                # Preserve exact first-fault bytes, even if live logs rotated
+                # afterwards. Only atomically replace the public archive after
+                # the final capture (including this nested original) succeeds.
+                with destination.open("rb") as first_fault:
+                    info = os.fstat(first_fault.fileno())
+                    entry = tarfile.TarInfo(f"{folder.name}/first_fault-debug.tar.gz")
+                    entry.size, entry.mtime, entry.mode = info.st_size, info.st_mtime, 0o640
+                    archive.addfile(entry, first_fault)
+                    metadata["preserved_first_fault_bytes"] = info.st_size
+            try:
+                from .full_run_summary import summarize_run
+                summary = summarize_run(folder)
+                payload = json.dumps(summary, ensure_ascii=False, indent=2).encode("utf8")
+                entry = tarfile.TarInfo(f"{folder.name}/diagnostic_summary.json")
+                entry.size, entry.mode = len(payload), 0o640
+                archive.addfile(entry, io.BytesIO(payload))
+            except Exception as exc:
+                # A damaged JSONL/summary helper must not block the raw evidence.
+                metadata["summary_error"] = f"{type(exc).__name__}: {exc}"
             for path in sorted(folder.rglob("*")):
                 if not path.is_file() or path.is_symlink():
                     continue
@@ -92,7 +115,7 @@ def create_bundle(folder, *, automatic=False, reason="runtime_failure"):
         if automatic:
             # A completed archive is preserved even if fault-state logs later
             # rotate or normal user shutdown happens hours after the fault.
-            completed = {"complete": True, "archive": str(destination),
+            completed = {"complete": True, "finalized": finalize, "archive": str(destination),
                          "created_utc": metadata["capture_finished_utc"],
                          "trigger": metadata["trigger"]}
             (folder / STATUS_FILE).write_text(json.dumps(completed, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

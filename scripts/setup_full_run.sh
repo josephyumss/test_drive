@@ -101,7 +101,7 @@ archive_failure() {
         interpreter="$(command -v python3 || true)"
     fi
     if [[ -n "$interpreter" ]] && "$interpreter" "$PROJECT_DIR/scripts/full_run_diagnostics.py" "$LOG_DIR" \
-        --auto-bundle --reason "installation_failed_${failed}_blocked_${blocked}" > "$LOG_DIR/bundle.log" 2>&1; then
+        --auto-bundle --capture-environment --reason "installation_failed_${failed}_blocked_${blocked}" > "$LOG_DIR/bundle.log" 2>&1; then
         echo "[BUNDLE] Saved: $archive" | tee -a "$LOG_DIR/launcher.log"
         return 0
     fi

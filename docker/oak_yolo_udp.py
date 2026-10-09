@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+from importlib import metadata
 import socket
 import threading
 import time
@@ -104,7 +105,20 @@ def main() -> None:
     parser.add_argument("--web-port", type=int, default=8081)
     args = parser.parse_args()
 
+    def log_event(event, **data):
+        print(json.dumps({"component": "oak_yolo", "event": event, "unix_s": time.time(),
+                          "monotonic_s": time.monotonic(), **data}), flush=True)
+
+    versions = {}
+    for package in ("depthai", "ultralytics", "torch", "opencv-python"):
+        try:
+            versions[package] = metadata.version(package)
+        except Exception as exc:
+            versions[package] = f"unavailable: {type(exc).__name__}: {exc}"
+    log_event("startup", settings=vars(args), versions=versions)
+    log_event("load_model_begin", model=args.model)
     model = YOLO(args.model)
+    log_event("load_model_complete")
     udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     destination = (args.host, args.port)
     minimum_period = 1.0 / max(1.0, args.rate)
@@ -112,6 +126,10 @@ def main() -> None:
     preview = PreviewState()
     preview_server = start_preview_server(preview, args.web_port)
 
+    frame_count = sent_count = 0
+    last_health = time.monotonic()
+    max_inference_s = 0.0
+    log_event("open_camera_begin", width=args.width, height=args.height)
     with dai.Device(build_pipeline(args.width, args.height)) as device:
         queue = device.getOutputQueue("rgb", maxSize=1, blocking=False)
         print(
@@ -126,6 +144,7 @@ def main() -> None:
                 continue
             last_inference = now
             frame = packet.getCvFrame()
+            frame_count += 1
             predict_args = {
                 "conf": args.confidence,
                 "device": args.device,
@@ -134,7 +153,10 @@ def main() -> None:
             }
             if args.half:
                 predict_args["half"] = True
+            prediction_started = time.monotonic()
             result = model.predict(frame, **predict_args)[0]
+            inference_s = time.monotonic() - prediction_started
+            max_inference_s = max(max_inference_s, inference_s)
             detections = []
             if result.boxes is not None:
                 for box in result.boxes:
@@ -149,11 +171,18 @@ def main() -> None:
             payload = {
                 "version": 1,
                 "timestamp": time.time(),
+                "frame_id": frame_count,
                 "width": int(frame.shape[1]),
                 "height": int(frame.shape[0]),
                 "detections": detections,
             }
             udp.sendto(json.dumps(payload, ensure_ascii=False).encode("utf-8"), destination)
+            sent_count += 1
+            if time.monotonic() - last_health >= 5:
+                log_event("camera_health", frames=frame_count, UDP_sent=sent_count,
+                          inference_s=inference_s, max_inference_s=max_inference_s,
+                          detections=len(detections), frame_shape=frame.shape[:2], destination=destination)
+                last_health = time.monotonic()
             annotated = result.plot()
             encoded, jpeg = cv2.imencode(".jpg", annotated)
             if encoded:

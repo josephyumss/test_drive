@@ -53,6 +53,55 @@ class BundleTests(unittest.TestCase):
         self.assertEqual(create_bundle(self.folder, automatic=True, reason="later_shutdown"), destination)
         self.assertEqual(destination.read_bytes(), original)
 
+    def test_final_capture_adds_shutdown_errors_and_preserves_exact_first_fault(self):
+        destination = create_bundle(self.folder, automatic=True, reason="first_fault")
+        original = destination.read_bytes()
+        (self.folder / "shutdown.log").write_text("late UART/GPIO cleanup error\n")
+        (self.folder / "events.jsonl").write_text('{"event":"exception","context":"GPIO_cleanup"}\n')
+        self.assertEqual(create_bundle(self.folder, automatic=True, finalize=True), destination)
+        with tarfile.open(destination) as archive:
+            self.assertEqual(archive.extractfile("run/first_fault-debug.tar.gz").read(), original)
+            self.assertIn(b"late UART", archive.extractfile("run/shutdown.log").read())
+            summary = json.load(archive.extractfile("run/diagnostic_summary.json"))
+            self.assertEqual(summary["event_counts"]["exception"], 1)
+            metadata = json.load(archive.extractfile("run/bundle_metadata.json"))
+            self.assertTrue(metadata["finalized"])
+            self.assertEqual(metadata["trigger"]["reason"], "first_fault")
+        final = destination.read_bytes()
+        self.assertEqual(create_bundle(self.folder, automatic=True, finalize=True), destination)
+        self.assertEqual(destination.read_bytes(), final)
+
+    def test_failed_final_capture_keeps_original_first_fault_archive_and_status(self):
+        destination = create_bundle(self.folder, automatic=True)
+        original = destination.read_bytes()
+        original_status = (self.folder / STATUS_FILE).read_bytes()
+        with mock.patch("jetson.amr_core.full_run_diagnostics.tarfile.open", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                create_bundle(self.folder, automatic=True, finalize=True)
+        self.assertEqual(destination.read_bytes(), original)
+        self.assertEqual((self.folder / STATUS_FILE).read_bytes(), original_status)
+        self.assertFalse(list(self.folder.parent.glob("*.part")))
+
+    def test_corrupt_events_do_not_prevent_raw_archive_and_summary(self):
+        (self.folder / "events.jsonl").write_text('bad\n[]\nnull\n{}\n{"event":"state"}\n')
+        destination = create_bundle(self.folder, automatic=True)
+        with tarfile.open(destination) as archive:
+            summary = json.load(archive.extractfile("run/diagnostic_summary.json"))
+            self.assertEqual(summary["unreadable_lines"], 4)
+            self.assertEqual(summary["event_counts"]["state"], 1)
+
+    def test_summary_combines_rotations_and_all_install_failures(self):
+        (self.folder / "events.jsonl.2").write_text('{"event":"state","after":"FAULT_STOP","reason":"original"}\n')
+        (self.folder / "events.jsonl.1").write_text('{"event":"ultrasonic","reading":{"side":"left","status":"NO_ECHO"}}\n')
+        (self.folder / "events.jsonl").write_text('{"event":"ultrasonic","reading":{"side":"right","status":"VALID"}}\n')
+        (self.folder / "stages.tsv").write_text("step\tstatus\texit_code\nGPIO\tFAILED\t1\nROS\tBLOCKED\t78\nmodel\tOK\t0\n")
+        destination = create_bundle(self.folder)
+        with tarfile.open(destination) as archive:
+            summary = json.load(archive.extractfile("run/diagnostic_summary.json"))
+            self.assertEqual(summary["first_retained_fault"]["reason"], "original")
+            self.assertEqual(summary["ultrasonic_counts"], {"left": {"NO_ECHO": 1}, "right": {"VALID": 1}})
+            self.assertEqual(len(summary["failed_or_blocked_setup_stages"]), 2)
+
     def test_manual_capture_can_refresh_same_path(self):
         destination = create_bundle(self.folder, automatic=True)
         original = destination.read_bytes()
@@ -96,6 +145,26 @@ class BundleTests(unittest.TestCase):
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(Path(result.stdout.strip()).is_file())
+
+    def test_cli_summary_keeps_latest_per_port_RX_health(self):
+        health = {"active_status_port": "commands", "expected": "$STATUS",
+                  "ports": {"commands": {"rx_bytes": 128}, "status": {"rx_bytes": 0}}}
+        records = [{"event": "uart_health", "active_status_port": None, "ports": {}},
+                   {"event": "shutdown", "uart_rx": health}]
+        (self.folder / "events.jsonl").write_text(
+            "\n".join(json.dumps(r) for r in records) + "\n", encoding="utf8")
+        result = subprocess.run([sys.executable, str(ROOT / "scripts/full_run_diagnostics.py"), str(self.folder)],
+                                capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        summary = json.loads(result.stdout)
+        self.assertEqual(summary["latest_uart_health"], health)
+        self.assertEqual(summary["event_counts"]["uart_health"], 1)
+
+    def test_cli_summary_accepts_old_records_without_RX_health(self):
+        result = subprocess.run([sys.executable, str(ROOT / "scripts/full_run_diagnostics.py"), str(self.folder)],
+                                capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIsNone(json.loads(result.stdout)["latest_uart_health"])
 
     @unittest.skipUnless(os.name == "posix", "requires Unix file permissions")
     def test_completed_archive_is_group_readable_without_world_access_or_group_write(self):

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from dataclasses import asdict
 import json
 import math
+import os
 from pathlib import Path
 import queue
 import secrets
@@ -22,6 +24,7 @@ from jetson.amr_core.full_run_diagnostics import request_auto_bundle
 from jetson.amr_core.full_run_ultrasonic import UltrasonicWorker
 from jetson.amr_core.full_run_legacy import LegacyControlAdapter
 from jetson.amr_core.full_run_user_stop import read_stop_request
+from jetson.amr_core.full_run_uart import StatusReceiver
 from jetson.amr_core.reactive_avoidance import wrap_angle
 
 
@@ -65,23 +68,43 @@ def make_node(config, core, recorder):
     class FullRunNode(Node):
         def __init__(self):
             super().__init__("amr_full_run")
+            self.counts = Counter()
+            self.received = {}
             self.create_subscription(String, "/yolo/detections", self.camera, 10)
             self.create_subscription(LaserScan, "/scan", self.scan, qos_profile_sensor_data)
 
+        def diagnostics_snapshot(self):
+            result = {"counts": dict(self.counts), "last_received_monotonic_s": dict(self.received),
+                      "publishers": {}}
+            for topic in ("/scan", "/yolo/detections"):
+                try:
+                    result["publishers"][topic] = [
+                        {"node": p.node_name, "namespace": p.node_namespace, "type": p.topic_type,
+                         "qos": str(p.qos_profile)} for p in self.get_publishers_info_by_topic(topic)[:20]]
+                except Exception as exc:
+                    result["publishers"][topic] = {"inspection_error": repr(exc)}
+            return result
+
         def camera(self, message):
             now = time.monotonic()
+            self.counts["camera_received"] += 1
+            self.received["camera"] = now
             recorder.emit("yolo_raw", payload=message.data)
             try:
                 detections = json.loads(message.data)
                 if not isinstance(detections, list) or any(not isinstance(d, dict) for d in detections):
                     raise ValueError("Expected a list of detection objects")
                 core.update_camera(detections, now)
+                self.counts["camera_valid"] += 1
             except (ValueError, TypeError, KeyError) as exc:
                 core.camera_stamp = None
+                self.counts["camera_invalid"] += 1
                 recorder.emit("yolo_invalid", error=str(exc))
 
         def scan(self, message):
             now = time.monotonic()
+            self.counts["lidar_received"] += 1
+            self.received["lidar"] = now
             recorder.emit("scan_raw", frame_id=message.header.frame_id,
                           source_stamp={"sec": message.header.stamp.sec, "nanosec": message.header.stamp.nanosec},
                           angle_min=message.angle_min, angle_increment=message.angle_increment,
@@ -89,8 +112,10 @@ def make_node(config, core, recorder):
             try:
                 points, front = parse_scan(message, config)
                 core.update_scan(points, front, now)
+                self.counts["lidar_valid"] += 1
             except (ValueError, TypeError) as exc:
                 core.scan_stamp = None
+                self.counts["lidar_invalid"] += 1
                 recorder.emit("scan_invalid", error=str(exc))
     return FullRunNode()
 
@@ -103,6 +128,8 @@ def main(arguments=None):
     parser.add_argument("--baudrate", type=int, default=115200)
     parser.add_argument("--mcu-protocol", choices=("legacy", "ctrl"), default="legacy",
                         help="Default legacy uses existing $CMD/$STATUS; no firmware update")
+    parser.add_argument("--no-command-status-fallback", action="store_true",
+                        help="Receive telemetry only on --status-port; do not also inspect command UART RX")
     parser.add_argument("--user-stop-file")
     parser.add_argument("--log-dir", required=True)
     parser.add_argument("--supervisor-pid", type=int)
@@ -119,18 +146,46 @@ def main(arguments=None):
     recorder = FlightRecorder(args.log_dir, config.log_max_bytes, config.log_backup_count)
     recorder.emit("configuration", config=asdict(config), port=args.port, status_port=args.status_port,
                   mcu_protocol=args.mcu_protocol,
+                  command_status_fallback=not args.no_command_status_fallback,
                   argv=sys.argv, python=sys.version, expected_side_range_m=config.expected_side_range_m,
                   rear_clearance_m=config.rear_clearance_m)
     core = FullRunController(config, secrets.randbelow(0x7ffffffe) + 1, time.monotonic(), recorder.emit,
                              mcu_protocol=args.mcu_protocol)
     legacy = LegacyControlAdapter(core.session, config.maximum_rpm, recorder.emit) if args.mcu_protocol == "legacy" else None
-    command_uart = status_uart = worker = node = None
+    command_uart = status_uart = worker = node = receiver = None
     ros_initialized = False
     interrupted = False
     bundle_requested = False
     failed = False
     last_stop_request = None
     instant_stop_pending = False
+    result = 0
+    startup_stage = "before_imports"
+    tx_attempt = None
+    loop_metrics = {"cycles": 0, "max_heartbeat_gap_s": 0.0, "max_cycle_work_s": 0.0}
+
+    def startup_step(stage, **details):
+        nonlocal startup_stage
+        startup_stage = stage
+        recorder.emit("startup_step", stage=stage, **details)
+
+    def runtime_health():
+        now = time.monotonic()
+        recorder.emit("runtime_health", state=core.state, phase=core.phase,
+                      health_errors=core.health_errors(now), loop=dict(loop_metrics),
+                      ROS=node.diagnostics_snapshot() if node and hasattr(node, "diagnostics_snapshot") else None,
+                      ultrasonic=worker.snapshot() if worker and hasattr(worker, "snapshot") else None)
+
+    def report_exception(context):
+        details = {"context": context, "startup_stage": startup_stage, "traceback": traceback.format_exc(),
+                   "last_TX_attempt": tx_attempt, "snapshot": core.snapshot(time.monotonic()),
+                   "uart_rx": receiver.snapshot(time.monotonic()) if receiver else None}
+        try:
+            recorder.emit("exception", **details)
+        except Exception:
+            # A full/unwritable disk may also break the JSONL writer. Preserve
+            # the original exception on stderr/systemd journal if available.
+            print("[FLIGHT RECORDER FAILURE] " + json.dumps(details, default=str), file=sys.stderr, flush=True)
 
     def interrupt(signum, _frame):
         nonlocal interrupted
@@ -140,20 +195,37 @@ def main(arguments=None):
     signal.signal(signal.SIGINT, interrupt)
     signal.signal(signal.SIGTERM, interrupt)
     try:
+        startup_step("import_serial")
         import serial
+        startup_step("import_ROS")
         import rclpy
+        startup_step("import_Jetson_GPIO")
         import Jetson.GPIO as GPIO
+        startup_step("open_command_UART", requested=args.port, resolved=os.path.realpath(args.port),
+                     baudrate=args.baudrate)
         command_uart = serial.Serial(args.port, args.baudrate, timeout=0, write_timeout=0.15, exclusive=True)
-        status_uart = command_uart if args.status_port == args.port else serial.Serial(
+        same_uart = os.path.realpath(args.status_port) == os.path.realpath(args.port)
+        startup_step("open_status_UART", requested=args.status_port, resolved=os.path.realpath(args.status_port),
+                     shared_handle=same_uart, baudrate=args.baudrate)
+        status_uart = command_uart if same_uart else serial.Serial(
             args.status_port, args.baudrate, timeout=0, write_timeout=0.15, exclusive=True)
-        status_uart.reset_input_buffer()
+        receiver = StatusReceiver(command_uart, status_uart, args.port, args.status_port,
+                                  args.mcu_protocol, core.session,
+                                  command_fallback=not args.no_command_status_fallback, emit=recorder.emit)
+        startup_step("initialize_ROS_context")
         rclpy.init()
         ros_initialized = True
+        # Keep the controller's own stop path after ROS installs its handlers.
+        signal.signal(signal.SIGINT, interrupt)
+        signal.signal(signal.SIGTERM, interrupt)
+        startup_step("create_ROS_subscriptions")
         node = make_node(config, core, recorder)
+        startup_step("initialize_ultrasonic_GPIO")
         worker = UltrasonicWorker(GPIO, config, recorder.emit)
-        buffer = bytearray()
+        startup_step("adapter_initialized_waiting_for_live_inputs")
         last_handshake = -math.inf
         last_snapshot = -math.inf
+        last_uart_health = -math.inf
         last_command_s = time.monotonic()
         recorder.emit("handshake", session=core.session,
                       mcu_protocol=args.mcu_protocol,
@@ -172,21 +244,14 @@ def main(arguments=None):
                     start_ticks = None
                 if start_ticks != args.supervisor_start_ticks:
                     recorder.emit("exception", reason="launcher_disappeared_or_PID_reused")
-                    return 1
+                    core.fault("launcher_disappeared_or_PID_reused")
+                    result = 1
+                    break
             rclpy.spin_once(node, timeout_sec=0)
-            incoming = status_uart.read(min(status_uart.in_waiting, 4096))
-            if incoming:
-                recorder.emit("uart_rx_chunk", hex=incoming.hex(), text=incoming.decode("ascii", errors="replace"))
-                buffer.extend(incoming)
-            if len(buffer) > 8192:
-                recorder.emit("uart_overflow", bytes=len(buffer))
-                buffer.clear()
+            lines, active_overflow = receiver.poll(time.monotonic())
+            if active_overflow:
                 core.status_stamp = None
-            while b"\n" in buffer:
-                line, _, rest = buffer.partition(b"\n")
-                buffer = bytearray(rest)
-                decoded = line.rstrip(b"\r").decode("ascii", errors="replace")
-                recorder.emit("uart_line", line=decoded)
+            for decoded in lines:
                 if legacy and decoded.startswith("$STATUS"):
                     try:
                         core.update_status(legacy.decode(decoded, time.monotonic(),
@@ -210,6 +275,7 @@ def main(arguments=None):
             now = time.monotonic()
             if not legacy and core.status is None and now - last_handshake >= 0.5:
                 payload = f"$FULL,{core.session}\r\n".encode("ascii")
+                tx_attempt = {"port": args.port, "text": payload.decode("ascii"), "monotonic_s": now}
                 command_uart.write(payload)
                 recorder.emit("uart_tx", kind="handshake", text=payload.decode("ascii"))
                 last_handshake = now
@@ -238,20 +304,30 @@ def main(arguments=None):
             if args.preflight_only:
                 command = (0, 0)
             payload = f"$CMD,{command[0]},{command[1]},{int(instant_stop_pending)}\r\n".encode("ascii")
+            tx_attempt = {"port": args.port, "text": payload.decode("ascii"), "monotonic_s": now}
             count = command_uart.write(payload)
             if count != len(payload):
                 raise IOError(f"Short UART write: {count}/{len(payload)}")
             instant_stop_pending = False
+            heartbeat_gap = now - last_command_s
             recorder.emit("uart_tx", kind="command", text=payload.decode("ascii"),
-                          heartbeat_gap_s=now - last_command_s, state=core.state, phase=core.phase)
+                          heartbeat_gap_s=heartbeat_gap, state=core.state, phase=core.phase)
             last_command_s = now
+            loop_metrics["cycles"] += 1
+            loop_metrics["max_heartbeat_gap_s"] = max(loop_metrics["max_heartbeat_gap_s"],
+                                                      heartbeat_gap)
             worker.inside = core.inside if core.phase in ("BASELINE", "PASS", "REAR_CLEARANCE") else None
             if now - last_snapshot >= 0.10:
                 snapshot = core.snapshot(now)
                 if legacy:
                     snapshot["legacy"] = legacy.snapshot()
+                snapshot["uart_rx"] = receiver.snapshot(now)
                 recorder.emit("snapshot", **snapshot)
                 last_snapshot = now
+            if now - last_uart_health >= 5 or (core.state == "FAULT_STOP" and not bundle_requested):
+                runtime_health()
+                recorder.emit("uart_health", state=core.state, **receiver.snapshot(now))
+                last_uart_health = now
             if core.state == "FAULT_STOP" and not bundle_requested:
                 # Zero RPM was already sent above. The launcher performs
                 # compression in a separate process, keeping this heartbeat
@@ -265,15 +341,20 @@ def main(arguments=None):
             if args.preflight_only and core.preflight_ready:
                 recorder.emit("ready", mcu_protocol=args.mcu_protocol,
                               message="Preflight passed: fresh camera/LiDAR/MCU status/GPIO, zero motion only")
-                return 0
+                result = 0
+                break
             if args.preflight_only and core.state == "FAULT_STOP":
-                return 1
-            time.sleep(max(0, 0.02 - (time.monotonic() - cycle_started)))
-        return 0
+                result = 1
+                break
+            work_s = time.monotonic() - cycle_started
+            loop_metrics["max_cycle_work_s"] = max(loop_metrics["max_cycle_work_s"], work_s)
+            time.sleep(max(0, 0.02 - work_s))
+        recorder.emit("loop_exit", interrupted=interrupted, result=result, ROS_context_ok=rclpy.ok(),
+                      state=core.state, phase=core.phase, loop=loop_metrics)
     except Exception:
         failed = True
-        recorder.emit("exception", traceback=traceback.format_exc(), snapshot=core.snapshot(time.monotonic()))
-        return 1
+        report_exception("controller_main_loop_or_initialization")
+        result = 1
     finally:
         # Stop the actuator first. GPIO teardown/ROS shutdown may take time.
         if command_uart is not None:
@@ -281,10 +362,17 @@ def main(arguments=None):
                 for _ in range(3):
                     command_uart.write(b"$CMD,0,0,1\r\n")
                     time.sleep(0.02)
-                recorder.emit("shutdown", reason="stop_and_brake_sent", snapshot=core.snapshot(time.monotonic()))
+                recorder.emit("shutdown", reason="stop_and_brake_sent", snapshot=core.snapshot(time.monotonic()),
+                              uart_rx=receiver.snapshot(time.monotonic()) if receiver else None)
             except Exception:
                 failed = True
-                recorder.emit("exception", context="shutdown_stop", traceback=traceback.format_exc())
+                report_exception("shutdown_stop")
+        if receiver is not None:
+            try:
+                runtime_health()
+            except Exception:
+                failed = True
+                report_exception("final_runtime_health")
         for name, cleanup in (("gpio", worker.close if worker else None),
                               ("ROS_node", node.destroy_node if node else None),
                               ("status_UART", status_uart.close if status_uart and status_uart is not command_uart else None),
@@ -294,19 +382,24 @@ def main(arguments=None):
                     cleanup()
                 except Exception:
                     failed = True
-                    recorder.emit("exception", context=name, traceback=traceback.format_exc())
+                    report_exception(name)
         if ros_initialized:
             try:
-                rclpy.shutdown()
+                rclpy.try_shutdown()
             except Exception:
                 failed = True
-                recorder.emit("exception", context="ROS_shutdown", traceback=traceback.format_exc())
+                report_exception("ROS_shutdown")
         if failed:
             try:
                 request_auto_bundle(args.log_dir, "controller_exception_or_cleanup_failure")
             except OSError as exc:
                 print(f"[BUNDLE FAIL] Cannot request diagnostics: {exc}", file=sys.stderr, flush=True)
-        recorder.close()
+        try:
+            recorder.close()
+        except Exception:
+            failed = True
+            print("[FLIGHT RECORDER CLOSE FAILURE] " + traceback.format_exc(), file=sys.stderr, flush=True)
+    return 1 if failed else result
 
 
 if __name__ == "__main__":
