@@ -1,0 +1,54 @@
+2026-10-09T11:35:24+00:00
+Linux hyoripyu-desktop 5.15.148-tegra #1 SMP PREEMPT Thu Sep 18 15:08:33 PDT 2025 aarch64 aarch64 aarch64 GNU/Linux
+PRETTY_NAME="Ubuntu 22.04.5 LTS"
+NAME="Ubuntu"
+VERSION_ID="22.04"
+VERSION="22.04.5 LTS (Jammy Jellyfish)"
+VERSION_CODENAME=jammy
+ID=ubuntu
+ID_LIKE=debian
+HOME_URL="https://www.ubuntu.com/"
+SUPPORT_URL="https://help.ubuntu.com/"
+BUG_REPORT_URL="https://bugs.launchpad.net/ubuntu/"
+PRIVACY_POLICY_URL="https://www.ubuntu.com/legal/terms-and-policies/privacy-policy"
+UBUNTU_CODENAME=jammy
+uid=0(root) gid=0(root) groups=0(root)
+lrwxrwxrwx 1 root root        13  1월  1  1970 /dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0 -> ../../ttyUSB0
+crw-rw---- 1 root dialout 240, 1 10월  9 20:32 /dev/ttyTHS1
+crw-rw---- 1 root dialout 240, 2  7월 29 22:41 /dev/ttyTHS2
+Python 3.10.12
+Client: Docker Engine - Community
+ Version:           29.8.2
+ API version:       1.56
+ Go version:        go1.26.8
+ Git commit:        7fc2dff
+ Built:             Wed Sep 30 19:32:13 2026
+ OS/Arch:           linux/arm64
+ Context:           default
+
+Server: Docker Engine - Community
+ Engine:
+  Version:          29.8.2
+  API version:      1.56 (minimum version 1.40)
+  Go version:       go1.26.8
+  Git commit:       8af9fe3
+  Built:            Wed Sep 30 19:32:13 2026
+  OS/Arch:          linux/arm64
+  Experimental:     false
+ containerd:
+  Version:          v2.3.6
+  GitCommit:        ee2735368117d2eb259779949d5e75cdafec9761
+ runc:
+  Version:          1.5.1
+  GitCommit:        v1.5.1-0-g8f2685a4
+ docker-init:
+  Version:          0.19.0
+  GitCommit:        de40ad0
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/mmcblk0p1  116G   39G   73G  35% /
+NVIDIA Jetson Orin Nano Engineering Reference Developer Kit Super
+GPIO 2.1.7
+GPIO board {'P1_REVISION': 1, 'RAM': '32768M, 65536M', 'REVISION': 'Unknown', 'TYPE': 'JETSON_ORIN_NANO', 'MANUFACTURER': 'NVIDIA', 'PROCESSOR': 'A78AE'}
+pyserial 3.5
+ROS /opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/__init__.py
+ROS_DOMAIN_ID=0 ROS_LOCALHOST_ONLY=0

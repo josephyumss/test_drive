@@ -1,0 +1,26 @@
+step	status	exit_code	started_utc	finished_utc	log_file	note
+system_before	OK	0	2026-10-09T11:37:40Z	2026-10-09T11:37:42Z	system_before.log	
+platform	OK	0	2026-10-09T11:37:42Z	2026-10-09T11:37:42Z	platform.log	
+user_context	OK	0	2026-10-09T11:37:42Z	2026-10-09T11:37:42Z	user_context.log	
+source_snapshot	OK	0	2026-10-09T11:37:42Z	2026-10-09T11:37:42Z	source_snapshot.log	
+docker_daemon	OK	0	2026-10-09T11:37:42Z	2026-10-09T11:37:42Z	docker_daemon.log	
+docker_runtime	OK	0	2026-10-09T11:37:42Z	2026-10-09T11:37:42Z	docker_runtime.log	
+apt_base_update	SKIP	77	2026-10-09T11:37:42Z	2026-10-09T11:37:42Z	apt_base_update.log	Already installed/usable; existing installation reused.
+base_packages	SKIP	77	2026-10-09T11:37:42Z	2026-10-09T11:37:43Z	base_packages.log	Already installed/usable; existing installation reused.
+apt_universe	SKIP	77	2026-10-09T11:37:43Z	2026-10-09T11:37:43Z	apt_universe.log	Already installed/usable; existing installation reused.
+ros_apt_source	SKIP	77	2026-10-09T11:37:43Z	2026-10-09T11:37:43Z	ros_apt_source.log	Already installed/usable; existing installation reused.
+apt_ros_update	SKIP	77	2026-10-09T11:37:43Z	2026-10-09T11:37:44Z	apt_ros_update.log	Already installed/usable; existing installation reused.
+ros_packages	SKIP	77	2026-10-09T11:37:44Z	2026-10-09T11:37:44Z	ros_packages.log	Already installed/usable; existing installation reused.
+ros_bridge_build	SKIP	77	2026-10-09T11:37:44Z	2026-10-09T11:37:45Z	ros_bridge_build.log	Already installed/usable; existing installation reused.
+lidar_source	SKIP	77	2026-10-09T11:37:45Z	2026-10-09T11:37:45Z	lidar_source.log	Already installed/usable; existing installation reused.
+lidar_build	SKIP	77	2026-10-09T11:37:45Z	2026-10-09T11:37:46Z	lidar_build.log	Already installed/usable; existing installation reused.
+model_download	SKIP	77	2026-10-09T11:37:46Z	2026-10-09T11:37:46Z	model_download.log	Already installed/usable; existing installation reused.
+yolo_image	SKIP	77	2026-10-09T11:37:46Z	2026-10-09T11:37:46Z	yolo_image.log	Already installed/usable; existing installation reused.
+jetson_gpio	SKIP	77	2026-10-09T11:37:46Z	2026-10-09T11:37:46Z	jetson_gpio.log	Already installed/usable; existing installation reused.
+verify_python	OK	0	2026-10-09T11:37:46Z	2026-10-09T11:37:47Z	verify_python.log	
+verify_ros_bridge	OK	0	2026-10-09T11:37:47Z	2026-10-09T11:37:48Z	verify_ros_bridge.log	
+verify_lidar	OK	0	2026-10-09T11:37:48Z	2026-10-09T11:37:49Z	verify_lidar.log	
+verify_model	OK	0	2026-10-09T11:37:49Z	2026-10-09T11:37:49Z	verify_model.log	
+verify_yolo_image	OK	0	2026-10-09T11:37:49Z	2026-10-09T11:37:50Z	verify_yolo_image.log	
+configuration	OK	0	2026-10-09T11:37:50Z	2026-10-09T11:37:50Z	configuration.log	
+system_after	OK	0	2026-10-09T11:37:50Z	2026-10-09T11:37:51Z	system_after.log	

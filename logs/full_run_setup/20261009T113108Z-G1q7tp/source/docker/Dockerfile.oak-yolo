@@ -1,0 +1,6 @@
+FROM ultralytics/ultralytics:latest-jetson-jetpack6
+# The pipeline below uses the stable DepthAI 2.x XLinkOut API. DepthAI 3.x
+# removed that node, so keep the container dependency on the matching major.
+RUN python3 -m pip install --no-cache-dir "depthai>=2.24,<3"
+COPY docker/oak_yolo_udp.py /opt/amr/oak_yolo_udp.py
+ENTRYPOINT ["python3", "/opt/amr/oak_yolo_udp.py"]

@@ -1,0 +1,6 @@
+b3e6e2655544520b14b61222ad07e09341041ebfc80e5666d73fa313f2da70b3  ./config/full_run.json
+622b21f5ce7dbf5182941e9ef2affd395ebe85c7ac0c37bfca3387a6346c316c  ./docker/Dockerfile.oak-yolo
+d03724c74172a3f85a0a0e00f696ef3b53eac1177d299833da914d15dc01fe3d  ./scripts/setup_full_run.sh
+e48e2187546a2330aa7a17fed6f444734b635be76aa408965806b239a884d1b2  ./scripts/build_yolo_docker.sh
+a6d1046649f417545ad49c09be7b409523d6e546b33e2f1dac54c2cc82fa37c9  ./scripts/full_run_setup_steps.sh
+b3be7fdbc699368a9e0d1515293fd23f83a0c9758061b1fd753b5bb5b4de8fef  ./scripts/download_models.sh

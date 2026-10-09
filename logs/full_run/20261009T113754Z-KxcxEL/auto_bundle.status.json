@@ -1,0 +1,10 @@
+{
+  "complete": true,
+  "archive": "/home/hyoripyu/Projects/test_drive/logs/full_run/20261009T113754Z-KxcxEL-debug.tar.gz",
+  "created_utc": "2026-10-09T11:39:28.929185+00:00",
+  "trigger": {
+    "requested_utc": "2026-10-09T11:39:28.097795+00:00",
+    "reason": "startup_timeout:STM32_STATUS_missing_or_stale",
+    "source": "controller"
+  }
+}

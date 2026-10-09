@@ -1,0 +1,7 @@
+Installation finished: 2026-10-09T11:35:18Z
+completed=1 exit=0 OK=13 SKIP=12 FAILED=0 BLOCKED=0
+Logs: /home/hyoripyu/Projects/test_drive/logs/full_run_setup/20261009T113506Z-9cga23
+Dependencies prepared. No motors or services were started.
+Existing STM32 firmware is supported; no firmware upload is required.
+Its existing $STATUS output must reach the configured Jetson RX port before preflight.
+Next: sudo bash scripts/start_full_run.sh --preflight-only

@@ -1,0 +1,69 @@
+[LOG] /home/hyoripyu/Projects/test_drive/logs/full_run/20261009T113119Z-p1hzha
+[LOG_ACCESS] checkout_group=1000 directories=group_read_traverse files=group_read
+[GPIO] JETSON_MODEL_NAME=JETSON_ORIN_NANO (project board fallback; detected hardware still takes precedence)
+{
+  "configuration": {
+    "wheel_diameter_m": 0.2032,
+    "wheel_base_m": 0.85,
+    "encoder_counts_per_output_rev": 40000,
+    "robot_width_m": 0.9,
+    "robot_length_m": 0.85,
+    "side_safety_margin_m": 0.25,
+    "rear_safety_margin_m": 0.15,
+    "side_sensor_x_m": 0.0,
+    "side_sensor_y_m": 0.25,
+    "lidar_x_m": 0.0,
+    "lidar_y_m": 0.0,
+    "lidar_yaw_deg": 0.0,
+    "image_width_px": 640,
+    "camera_horizontal_fov_deg": 69.0,
+    "camera_lidar_yaw_offset_deg": 0.0,
+    "minimum_confidence": 0.45,
+    "detection_frames": 3,
+    "trigger_distance_m": 2.0,
+    "maximum_rpm": 20,
+    "entry_rpm": 12,
+    "bypass_rpm": 16,
+    "return_rpm": 14,
+    "acceleration_rpm_s": 5.0,
+    "deceleration_rpm_s": 10.0,
+    "lookahead_m": 0.25,
+    "path_completion_m": 0.08,
+    "sensor_timeout_s": 1.0,
+    "mcu_timeout_s": 0.5,
+    "startup_timeout_s": 90.0,
+    "front_stop_m": 0.25,
+    "front_resume_m": 0.4,
+    "side_stop_m": 0.3,
+    "side_resume_m": 0.36,
+    "entry_side_clear_m": 0.8,
+    "side_object_max_m": 0.7,
+    "side_clear_min_m": 0.85,
+    "baseline_tolerance_m": 0.1,
+    "baseline_samples": 5,
+    "tail_clear_samples": 5,
+    "tail_min_travel_m": 0.03,
+    "seek_max_distance_m": 3.0,
+    "pass_max_distance_m": 10.0,
+    "path_timeout_s": 120.0,
+    "no_progress_timeout_s": 5.0,
+    "left_trig": 33,
+    "left_echo": 31,
+    "right_trig": 7,
+    "right_echo": 15,
+    "ultrasonic_interval_s": 0.06,
+    "ultrasonic_timeout_s": 0.03,
+    "ultrasonic_max_m": 3.0,
+    "log_max_bytes": 16777216,
+    "log_backup_count": 24
+  },
+  "mcu_protocol": "legacy",
+  "expected_side_range_m": 0.45,
+  "rear_clearance_m": 0.575
+}
+/home/hyoripyu/Projects/test_drive/.runtime/ldlidar_ros2_ws/install/ldlidar_stl_ros2
+/home/hyoripyu/Projects/test_drive/jetson_ws/install/amr_vision
+sha256:496bd9a3a752f04da075719923ed85b60aed9b610b53ee93d3f47d42f53f97c5
+[INFO] command=/dev/ttyTHS1 status=/dev/ttyTHS2 lidar=/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0 mode=--check protocol=legacy
+[INFO] Default legacy uses existing $CMD/$STATUS, without a firmware update. Live status RX is required; no open-loop fallback.
+[CHECK] Installation/configuration passed; live sensors and firmware not checked.

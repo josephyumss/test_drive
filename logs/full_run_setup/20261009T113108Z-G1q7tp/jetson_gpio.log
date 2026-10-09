@@ -1,0 +1,2 @@
+[GPIO] JETSON_MODEL_NAME=JETSON_ORIN_NANO
+[REUSE] Jetson.GPIO import passed.

@@ -1,0 +1,8 @@
+[GPIO] JETSON_MODEL_NAME=JETSON_ORIN_NANO
+[OK] serial version=3.5 file=/usr/lib/python3/dist-packages/serial/__init__.py
+[OK] numpy version=1.21.5 file=/usr/lib/python3/dist-packages/numpy/__init__.py
+[OK] yaml version=5.4.1 file=/usr/lib/python3/dist-packages/yaml/__init__.py
+[OK] cv2 version=4.5.4 file=/usr/lib/python3/dist-packages/cv2.cpython-310-aarch64-linux-gnu.so
+[OK] Jetson.GPIO version=2.1.7 file=/usr/lib/python3/dist-packages/Jetson/GPIO/__init__.py
+[GPIO] actual_board={'P1_REVISION': 1, 'RAM': '32768M, 65536M', 'REVISION': 'Unknown', 'TYPE': 'JETSON_ORIN_NANO', 'MANUFACTURER': 'NVIDIA', 'PROCESSOR': 'A78AE'}
+[SUMMARY] Failed imports: []

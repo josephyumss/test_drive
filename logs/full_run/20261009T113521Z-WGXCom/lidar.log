@@ -1,0 +1,16 @@
+[INFO] [1791545725.155211707] [ldlidar_published]: LDLiDAR SDK Pack Version is: v3.0.3
+[INFO] [1791545725.155595718] [ldlidar_published]: <product_name>: LDLiDAR_STL27L
+[INFO] [1791545725.155635239] [ldlidar_published]: <topic_name>: scan
+[INFO] [1791545725.155654664] [ldlidar_published]: <frame_id>: base_laser
+[INFO] [1791545725.155669865] [ldlidar_published]: <port_name>: /dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0
+[INFO] [1791545725.155685321] [ldlidar_published]: <port_baudrate>: 921600
+[INFO] [1791545725.155699561] [ldlidar_published]: <laser_scan_dir>: Clockwise
+[INFO] [1791545725.155712970] [ldlidar_published]: <enable_angle_crop_func>: false
+[INFO] [1791545725.155726506] [ldlidar_published]: <angle_crop_min>: 0.000000
+[INFO] [1791545725.155749067] [ldlidar_published]: <angle_crop_max>: 0.000000
+[INFO] [1791545725.169887982] [ldlidar_published]: ldlidar node start is success
+[INFO] [1791545725.174414772] [ldlidar_published]: ldlidar communication is normal.
+[INFO] [1791545725.184007152] [ldlidar_published]: Publish topic message:ldlidar scan data.
+[LDS][INFO][1791545725.169705000][Actual BaudRate reported:921600]
+[INFO] [1791545816.538762230] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[INFO] [1791545816.595831696] [ldlidar_published]: ldlidar_published is end
