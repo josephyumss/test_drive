@@ -44,6 +44,19 @@ class ScanTests(unittest.TestCase):
         self.assertAlmostEqual(front, 2.3)
         self.assertAlmostEqual(points[0][1], 2.3)
 
+    def test_configured_chassis_returns_are_self_filtered_without_hiding_external_points(self):
+        values = [math.inf]*360
+        values[180] = 0.20  # x=+0.20: physically inside the configured chassis.
+        values[181] = 2.0   # Outside the chassis and must remain an obstacle point.
+        metrics = {}
+        points, front = adapter.parse_scan(self.scan(values), FullRunConfig(), metrics)
+        self.assertEqual(len(points), 1)
+        self.assertAlmostEqual(points[0][1], 2.0)
+        self.assertEqual(metrics["valid_points"], 2)
+        self.assertEqual(metrics["self_filtered_points"], 1)
+        self.assertEqual(metrics["retained_points"], 1)
+        self.assertGreater(front, 1.9)
+
 
 class EchoTests(unittest.TestCase):
     def worker(self, stuck=False, generate=False):

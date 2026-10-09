@@ -28,12 +28,13 @@ from jetson.amr_core.full_run_uart import StatusReceiver
 from jetson.amr_core.reactive_avoidance import wrap_angle
 
 
-def parse_scan(message, config):
+def parse_scan(message, config, metrics=None):
     if (not all(math.isfinite(v) for v in (message.angle_min, message.angle_increment,
                                           message.range_min, message.range_max))
             or message.angle_increment == 0 or not 0 <= message.range_min < message.range_max):
         raise ValueError("Invalid LaserScan geometry")
     points, front, covered = [], [], {"left": 0, "right": 0}
+    valid_points = self_filtered_points = 0
     yaw = math.radians(config.lidar_yaw_deg)
     for index, distance in enumerate(message.ranges):
         angle = wrap_angle(message.angle_min + index * message.angle_increment + yaw)
@@ -48,6 +49,16 @@ def parse_scan(message, config):
         if valid:
             x = config.lidar_x_m + distance * math.cos(angle)
             y = config.lidar_y_m + distance * math.sin(angle)
+            valid_points += 1
+            # A return inside the configured chassis envelope is the robot
+            # itself, not traversable-space evidence.  Keeping these returns
+            # made side/rear chassis reflections look like obstacles in front
+            # of the bumper.  Do not add a margin here: points immediately
+            # outside the measured footprint remain safety obstacles.
+            if (abs(x) <= config.robot_length_m / 2
+                    and abs(y) <= config.robot_width_m / 2):
+                self_filtered_points += 1
+                continue
             robot_angle, robot_range = math.atan2(y, x), math.hypot(x, y)
             points.append((robot_angle, robot_range))
             if abs(robot_angle) <= math.radians(15):
@@ -56,6 +67,11 @@ def parse_scan(message, config):
             front.append(message.range_max)
     if not all(covered.values()) or not front:
         raise ValueError(f"Missing valid front/side scan coverage: {covered}")
+    if metrics is not None:
+        metrics.update(valid_points=valid_points,
+                       self_filtered_points=self_filtered_points,
+                       retained_points=len(points), front_samples=len(front),
+                       angular_coverage=covered)
     return sorted(points), min(front)
 
 
@@ -70,11 +86,13 @@ def make_node(config, core, recorder):
             super().__init__("amr_full_run")
             self.counts = Counter()
             self.received = {}
+            self.last_scan_metrics = {}
             self.create_subscription(String, "/yolo/detections", self.camera, 10)
             self.create_subscription(LaserScan, "/scan", self.scan, qos_profile_sensor_data)
 
         def diagnostics_snapshot(self):
             result = {"counts": dict(self.counts), "last_received_monotonic_s": dict(self.received),
+                      "last_scan": dict(self.last_scan_metrics),
                       "publishers": {}}
             for topic in ("/scan", "/yolo/detections"):
                 try:
@@ -110,7 +128,10 @@ def make_node(config, core, recorder):
                           angle_min=message.angle_min, angle_increment=message.angle_increment,
                           range_min=message.range_min, range_max=message.range_max, ranges=list(message.ranges))
             try:
-                points, front = parse_scan(message, config)
+                scan_metrics = {}
+                points, front = parse_scan(message, config, scan_metrics)
+                self.last_scan_metrics = scan_metrics
+                self.counts["lidar_self_filtered_points"] += scan_metrics["self_filtered_points"]
                 core.update_scan(points, front, now)
                 self.counts["lidar_valid"] += 1
             except (ValueError, TypeError) as exc:

@@ -4,6 +4,31 @@ Entry point: scripts/start_full_run.sh
 Controller: scripts/full_run_controller.py and jetson/amr_core/full_run.py
 Configuration: config/full_run.json (all lengths in metres)
 
+2026-10-10 live READY/FAULT diagnosis and fail-safe correction
+
+Archive 20261009T165633Z-CXY3ow-debug.tar.gz reached READY after 19.04s.
+UART was healthy on the ttyTHS1 fallback (7193/7193 valid compact STATUS
+frames), both MCU ultrasound channels were valid, LiDAR and camera were live,
+and physical UP changes were observed. All 23 attempted resumes were refused
+for front_clearance. The retained scan had 439 returns geometrically inside the
+configured 0.90m x 0.85m chassis. Those self-returns are now removed after the
+configured LiDAR transform and counted in runtime diagnostics. No margin is
+silently added: points just outside the measured chassis remain obstacles.
+
+The same retained scan still has symmetric close returns just outside the
+configured body, around y=+0.465..0.51m and y=-0.456..-0.51m. These continue to
+block departure. Confirm whether they are physical robot parts or real nearby
+objects, then enter the measured chassis and LiDAR mounting geometry in
+config/full_run.json. Do not hide them with a guessed crop/margin.
+
+At 700.43s a single camera interval exceeded the 1.0s freshness threshold and
+the old controller latched camera_missing_or_stale, although valid frames then
+resumed. Camera/LiDAR staleness now stops motion immediately but is recoverable:
+after valid data returns a new UP is required. MCU STATUS, side-sensor, firmware,
+loop and wheel-progress faults remain latched FAULT_STOP. Startup/preflight also
+requires live safe clearance before READY, so installation cannot report a
+successful live preflight while the same clearance condition prevents motion.
+
 2026-10-10 service installation failure fix
 
 Archive 20261009T161623Z-service-Y2J4NE-debug.tar.gz is a service REGISTRATION

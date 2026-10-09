@@ -600,14 +600,37 @@ class FullRunController:
             return 0, 0
         errors = self.health_errors(now)
         if self.state == "STARTUP":
-            if not errors and self.status and self.status.base_rpm == 0 and not self.status.stop_flags:
+            blocker = self.blocking_reason(resume=True) if not errors else None
+            if (not errors and blocker is None and self.status
+                    and self.status.base_rpm == 0 and not self.status.stop_flags):
                 self.preflight_ready = True
                 self.change("READY", "fresh_feeds_wait_new_UP")
             elif now - self.created >= self.c.startup_timeout_s:
-                self.fault("startup_timeout:" + ",".join(errors))
+                reasons = list(errors)
+                if blocker:
+                    reasons.append(f"resume_blocker:{blocker}")
+                if self.status and self.status.base_rpm != 0:
+                    reasons.append("nonzero_start_speed")
+                if self.status and self.status.stop_flags:
+                    reasons.append("stop_flag_active")
+                self.fault("startup_timeout:" + ",".join(reasons or ["readiness_not_established"]))
             return 0, 0
         if errors:
-            self.fault("sensor_health:" + ",".join(errors))
+            reason = "sensor_health:" + ",".join(errors)
+            # Camera/LiDAR processing can have a short scheduling/inference
+            # gap. Stop immediately, but make that stop recoverable and
+            # require a fresh UP after valid data returns. MCU/status/side
+            # sensor loss remains a latched FAULT_STOP.
+            recoverable = all(error.startswith(("camera_", "lidar_")) for error in errors)
+            if not recoverable:
+                self.fault(reason)
+            elif self.state == "RUNNING":
+                self.pause(reason)
+            elif self.pending_up:
+                self.pending_up = False
+                if self.status:
+                    self.resume_up_floor = self.status.up_count
+                self.emit("resume_denied", reason=reason)
             return 0, 0
         blocker = self.blocking_reason(resume=self.state != "RUNNING")
         if self.state in ("READY", "PAUSED"):

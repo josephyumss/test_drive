@@ -171,6 +171,51 @@ class FullRunTests(unittest.TestCase):
         self.assertEqual(self.core.state, "FAULT_STOP")
         self.assertEqual(self.up(), (0, 0))
 
+    def test_transient_camera_staleness_pauses_and_consumes_up_until_recovery(self):
+        self.start()
+        for _ in range(60):
+            self.now += 0.02
+            self.status = replace(self.status, uptime_ms=int(self.now * 1000))
+            self.core.update_status(self.status, self.now)
+            self.core.update_scan([], 4, self.now)
+            for side in ("left", "right"):
+                self.core.update_side(SideReading(side, self.now, "NO_ECHO"))
+            command = self.core.tick(self.now)
+        self.assertEqual(command, (0, 0))
+        self.assertEqual(self.core.state, "PAUSED")
+        self.assertIsNone(self.core.fault_reason)
+
+        # An UP while the camera is still stale is consumed, not queued for
+        # an automatic departure when frames return.
+        self.status = replace(self.status, up_count=self.status.up_count + 1, base_rpm=10)
+        self.now += 0.02
+        self.core.update_status(self.status, self.now)
+        self.core.update_scan([], 4, self.now)
+        for side in ("left", "right"):
+            self.core.update_side(SideReading(side, self.now, "NO_ECHO"))
+        self.assertEqual(self.core.tick(self.now), (0, 0))
+        self.feed()
+        self.assertEqual(self.step(), (0, 0))
+        self.assertEqual(self.core.state, "PAUSED")
+        self.up(10)
+        self.assertEqual(self.core.state, "RUNNING")
+
+    def test_startup_waits_for_external_clearance_and_reports_blocker(self):
+        config = replace(self.config, startup_timeout_s=0.05)
+        core = FullRunController(config, 123, self.now,
+                                 lambda event, **data: self.events.append((event, data)))
+        point = (math.atan2(0.4, 0.3), 0.5)
+        core.update_status(self.status, self.now)
+        core.update_camera([], self.now)
+        core.update_scan([point], 4, self.now)
+        for side in ("left", "right"):
+            core.update_side(SideReading(side, self.now, "NO_ECHO"))
+        self.assertEqual(core.tick(self.now + 0.02), (0, 0))
+        self.assertEqual(core.state, "STARTUP")
+        self.assertEqual(core.tick(self.now + 0.06), (0, 0))
+        self.assertEqual(core.state, "FAULT_STOP")
+        self.assertIn("resume_blocker:front_clearance", core.fault_reason)
+
     def test_full_width_front_corner_guard_uses_chassis_length(self):
         self.start()
         point = (math.atan2(0.4, 0.3), 0.5)
