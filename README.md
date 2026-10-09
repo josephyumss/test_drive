@@ -18,6 +18,25 @@ sudo systemctl stop amr-full-run.service \
 =====================================
 
 
+## 오류 로그를 Git으로 전달
+
+설치 오류는 `logs/full_run_setup/`, 점검·실행 오류는 `logs/full_run/`에 저장됩니다.
+두 폴더의 원본 로그와 자동 생성되는 `*-debug.tar.gz`는 Git 등록이 가능합니다.
+터미널의 `[BUNDLE] Saved: ...`에 표시된 오류 시각의 압축 파일 하나만 추가하는 것을 권장합니다.
+
+아래 첫 줄의 경로를 실제 압축 파일 경로로 바꿔서 실행하세요. Git 명령에는 `sudo`를 붙이지 않습니다.
+
+```bash
+git add -- "실제 진단 압축 파일 경로"
+git diff --cached --stat
+git commit -m "Add robot failure diagnostics"
+git push origin main
+```
+
+로그는 자동 생성되지만 Git 업로드는 위 명령으로 직접 해야 합니다.
+커밋 전에 민감한 정보와 파일 크기를 확인하고, 원본 전체에 대한 `git add logs/`는 피하세요.
+자세한 기록 형식과 용량 주의사항은 [docs/full-run.txt](docs/full-run.txt)를 참고하세요.
+
 SETUP 1
 
 cd /home/hyoripyu/Projects/test_drive

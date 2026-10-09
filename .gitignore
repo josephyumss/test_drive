@@ -17,7 +17,19 @@ jetson_ws/log/
 *.bin
 *.map
 *.log
-logs/
+
+# Full-run diagnostics are shared through Git (raw logs and debug archives).
+# Keep unrelated logs ignored, but allow BOTH full-run folders recursively.
+/logs/*
+!/logs/full_run/
+!/logs/full_run/**
+!/logs/full_run_setup/
+!/logs/full_run_setup/**
+# Local absolute-path alias and incomplete archives are not diagnostic evidence.
+/logs/full_run/latest
+/logs/full_run/**/*.part
+/logs/full_run_setup/**/*.part
+
 .run/
 .runtime/
 config/runtime.env

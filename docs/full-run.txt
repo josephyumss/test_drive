@@ -290,7 +290,32 @@ Summary: python3 scripts/full_run_diagnostics.py
 Optional manual fresh snapshot: sudo python3 scripts/full_run_diagnostics.py --bundle
 Send the automatically saved *-debug.tar.gz file for diagnosis, including all components.
 For an early launcher failure (before latest changes), supply its printed log
-directory as the diagnostics argument. No secrets/environment dump is included.
+directory as the diagnostics argument. No complete environment dump is collected,
+but command output may include local paths, hostnames, URLs or credentials passed
+to commands. Inspect diagnostics before committing to a shared/public repository.
+
+Sharing diagnostics through Git
+
+.gitignore allows raw files AND *-debug.tar.gz in logs/full_run/ and
+logs/full_run_setup/. Other log folders, the local latest symlink, incomplete
+*.part archives and private config/full_run.env remain ignored. The scripts do
+not stage, commit or push diagnostics automatically.
+
+Prefer adding ONLY the completed archive printed after [BUNDLE] Saved:
+  git add -- "<actual archive path printed by the launcher>"
+  git diff --cached --stat
+  git commit -m "Add robot failure diagnostics"
+  git push origin main
+
+Run Git commands as the checkout's normal user, not with sudo. Review staged
+files so unrelated changes/raw logs are not accidentally sent. Raw JSONL logs
+can be hundreds of MiB per run; do not add all of logs/ by default. If Git rejects
+an oversized archive, report that error and arrange Git LFS or split archives
+before retrying; do not silently omit diagnostic content. If push is rejected
+because the remote advanced, fetch and reconcile normally; never force-push.
+After the teammate pushes, the developer runs git pull --ff-only origin main
+and opens the committed archive. Without a completed bundle, the failed run's
+specific log folder can also be committed after checking its size/content.
 
 Hardware-free checks on a Linux checkout:
   python3 -m unittest discover -s tests -p 'test_full_run*.py' -v
