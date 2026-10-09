@@ -4,6 +4,39 @@ Entry point: scripts/start_full_run.sh
 Controller: scripts/full_run_controller.py and jetson/amr_core/full_run.py
 Configuration: config/full_run.json (all lengths in metres)
 
+2026-10-10 service installation failure fix
+
+Archive 20261009T161623Z-service-Y2J4NE-debug.tar.gz is a service REGISTRATION
+failure, not a motion/sensor failure. The checkout was clean at 2a4c8ea.
+The fatal diagnostic was:
+  WorkingDirectory= path is not absolute: "/home/hyoripyu/Projects/test_drive"
+The actual path was absolute, but our template surrounded it with quotes.
+systemd treats this setting as a raw path, not ExecStart's quoted argument list.
+WorkingDirectory now has no surrounding quotes; ExecStart retains its argument
+quotes so a checkout with internal spaces works. Source reference:
+https://github.com/systemd/systemd/blob/v249/src/core/load-fragment.c#L2307-L2362
+
+The absent amr-core.service and snapd/NVIDIA-unit warnings were NOT the fatal
+cause. Registration stopped at verify, before install/daemon-reload/enable;
+the chained service-start command therefore could not run after this failure.
+The installer still refuses an active or enabled old device-owner service,
+never stops/disables it implicitly, and never starts robot processes.
+
+Every service-install attempt now retains the exact generated amr-full-run.service,
+unit-template.service, their SHA256, systemd_version.log, old-service-check.log,
+individual verify/install/reload/enable output, and stages.tsv with exit codes.
+launcher.log names the current stage on failures/interruptions/final result.
+Failed attempts automatically bundle these files as before; successful attempt
+logs remain available too. Validation stays mandatory and dependent mutation
+steps never run after an earlier failure.
+
+After receiving this fix and passing live zero-motion preflight, retry:
+  sudo bash scripts/install_full_run_service.sh \
+    && sudo systemctl start amr-full-run.service
+This needs no STM32 change and no repeat of a successful dependency installation.
+READY still requires a new UP and safe live clearances; this archive contains no
+evidence that the physical sensors or obstacle-avoidance motion were healthy.
+
 2026-10-09 setup failure fix
 
 The received setup log 20261009T104457Z-vhFyNM failed only verify_python:

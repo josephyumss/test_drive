@@ -8,7 +8,7 @@ StartLimitBurst=5
 [Service]
 Type=simple
 User=root
-WorkingDirectory="@PROJECT_DIR@"
+WorkingDirectory=@PROJECT_DIR@
 ExecStart=/bin/bash "@PROJECT_DIR@/scripts/start_full_run.sh"
 Restart=on-failure
 RestartSec=5
