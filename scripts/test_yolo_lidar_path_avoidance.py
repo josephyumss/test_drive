@@ -52,11 +52,13 @@ LIDAR_SIDE_MAX_DEG = 75.0
 LIDAR_HARD_STOP_M = 0.25
 
 
-# Vehicle values: measure these on the real robot before ground operation.
-WHEEL_DIAMETER_M = 0.20
-WHEEL_BASE_M = 0.50
-ROBOT_WIDTH_M = 0.50
-ROBOT_LENGTH_M = 0.65
+# Vehicle dimensions from the chassis drawing and physical measurements.
+# The 0.85 m wheel base is estimated from the 0.90 m overall width minus
+# one 0.05 m wheel width (half a wheel on each side).
+WHEEL_DIAMETER_M = 0.2032  # 8 inches
+WHEEL_BASE_M = 0.85
+ROBOT_WIDTH_M = 0.90       # Including the protruding wheels
+ROBOT_LENGTH_M = 0.85
 SAFETY_MARGIN_M = 0.15
 
 

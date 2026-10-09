@@ -1,0 +1,22 @@
+[Unit]
+Description=Guide AMR continuous full run (READY requires physical UP)
+After=docker.service
+Wants=docker.service
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory="@PROJECT_DIR@"
+ExecStart=/bin/bash "@PROJECT_DIR@/scripts/start_full_run.sh"
+Restart=on-failure
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=120
+StandardOutput=journal
+StandardError=journal
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

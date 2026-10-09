@@ -14,6 +14,7 @@
 /* USER CODE BEGIN Includes */
 
 #include <stdio.h>
+#include "full_run_control.h"
 
 /* USER CODE END Includes */
 
@@ -168,7 +169,7 @@ volatile uint32_t dbg_status_tx_count = 0;
  * STM32 -> Jetson
  * ========================================================= */
 
-char telemetry_tx_buf[128];
+char telemetry_tx_buf[256];
 
 uint32_t telemetry_last_tick = 0;
 
@@ -269,6 +270,10 @@ static uint32_t rpm_down_last_tick = 0;
  * ========================================================= */
 
 volatile float base_target_rpm = 0.0f;
+static volatile FullRunControl full_run = {0};
+static uint8_t full_down_pending = 0;
+static volatile uint32_t full_left_counts = 0;
+static volatile uint32_t full_right_counts = 0;
 
 volatile float left_target_rpm = 0.0f;
 
@@ -609,6 +614,25 @@ int main(void)
                     &emergency_cmd
                 );
 
+            /* A new Jetson process always starts a fresh, zero-speed session.
+             * USART3 returns the session and cumulative button event counts.
+             */
+            unsigned long full_session = 0;
+            if (sscanf(uart1_rx_buffer, "$FULL,%lu", &full_session) == 1 &&
+                full_session > 0 && full_session <= 2147483647UL)
+            {
+                uint8_t is_new = !full_run.active || full_run.session != (uint32_t)full_session;
+                FullRun_Begin(&full_run, (uint32_t)full_session);
+                if (is_new) {
+                    base_target_rpm = left_target_rpm = right_target_rpm = 0.0f;
+                    rpm_up_flag = rpm_down_flag = full_down_pending = 0;
+                    emergency_stop = 0;
+                    command_received = 0;
+                    Motor_Brake_On();
+                }
+                parsed_count = -1; /* handshake, not a malformed CMD */
+            }
+
 
             /* =================================================
              * VALID PACKET
@@ -636,6 +660,7 @@ int main(void)
 
                     if (emergency_cmd == 1)
                     {
+                        if (full_run.active) FullRun_InstantStop(&full_run);
                         emergency_stop =
                             1;
 
@@ -662,6 +687,11 @@ int main(void)
 
                     else
                     {
+                        if (!FullRun_Allowed(&full_run)) left_cmd = right_cmd = 0;
+                        if (full_run.active) {
+                            if (left_cmd > full_run.base_rpm) left_cmd = full_run.base_rpm;
+                            if (right_cmd > full_run.base_rpm) right_cmd = full_run.base_rpm;
+                        }
                         emergency_stop =
                             0;
 
@@ -741,7 +771,7 @@ int main(void)
                 }
             }
 
-            else
+            else if (parsed_count != -1)
             {
                 dbg_cmd_parse_error_count++;
             }
@@ -789,6 +819,8 @@ int main(void)
                 emergency_stop =
                     1;
 
+                if (full_run.active) full_run.fault = 1; /* latched watchdog */
+
 
                 command_received =
                     0;
@@ -815,7 +847,26 @@ int main(void)
          * RPM UP BUTTON
          * ===================================================== */
 
-        if (rpm_up_flag == 1)
+        if (full_run.active)
+        {
+            uint8_t held = HAL_GPIO_ReadPin(RPM_DOWN_BTN_GPIO_Port,
+                                           RPM_DOWN_BTN_Pin) == GPIO_PIN_RESET;
+            uint8_t down_event = 0;
+            if (rpm_down_flag) full_down_pending = 1;
+            if (!held && full_down_pending) {
+                down_event = !full_run.instant_stop;
+                full_down_pending = 0;
+            }
+            FullRun_ButtonTick(&full_run, HAL_GetTick(), rpm_up_flag,
+                               down_event, held);
+            rpm_up_flag = rpm_down_flag = 0;
+            base_target_rpm = full_run.base_rpm;
+            if (!FullRun_Allowed(&full_run)) {
+                left_target_rpm = right_target_rpm = 0.0f;
+                Motor_Brake_On();
+            }
+        }
+        else if (rpm_up_flag == 1)
         {
             rpm_up_flag =
                 0;
@@ -838,7 +889,7 @@ int main(void)
          * RPM DOWN BUTTON
          * ===================================================== */
 
-        if (rpm_down_flag == 1)
+        if (!full_run.active && rpm_down_flag == 1)
         {
             rpm_down_flag =
                 0;
@@ -886,6 +937,24 @@ int main(void)
         {
             telemetry_last_tick =
                 HAL_GetTick();
+
+            if (full_run.active) {
+                uint8_t held = full_run.instant_stop &&
+                    HAL_GPIO_ReadPin(RPM_DOWN_BTN_GPIO_Port, RPM_DOWN_BTN_Pin) == GPIO_PIN_RESET;
+                int ctrl_len = snprintf(telemetry_tx_buf, sizeof(telemetry_tx_buf),
+                    "$CTRL,1,%lu,%u,%lu,%lu,%lu,%u,%u,%d,%d,%lu,%lu,%lu\r\n",
+                    (unsigned long)full_run.session, (unsigned)full_run.base_rpm,
+                    (unsigned long)full_run.up_count, (unsigned long)full_run.down_count,
+                    (unsigned long)full_run.stop_count,
+                    (unsigned)(held | (full_run.instant_stop ? 2U : 0U)),
+                    (unsigned)full_run.fault, (int)left_rpm, (int)right_rpm,
+                    (unsigned long)HAL_GetTick(),
+                    (unsigned long)full_left_counts, (unsigned long)full_right_counts);
+                if (ctrl_len > 0 && ctrl_len < (int)sizeof(telemetry_tx_buf)) {
+                    HAL_UART_Transmit(&huart3, (uint8_t *)telemetry_tx_buf,
+                                      (uint16_t)ctrl_len, 20);
+                }
+            }
 
 
             int len =
@@ -2481,14 +2550,6 @@ void HAL_TIM_PeriodElapsedCallback(
          * EMERGENCY
          * ===================================================== */
 
-        if (emergency_stop)
-        {
-            Motor_Brake_On();
-
-            return;
-        }
-
-
         /* =====================================================
          * ENCODER COUNT
          * ===================================================== */
@@ -2530,6 +2591,9 @@ void HAL_TIM_PeriodElapsedCallback(
 
         right_encoder_prev =
             right_now;
+
+        full_left_counts += (uint32_t)(int32_t)(LEFT_ENCODER_SIGN * left_encoder_delta);
+        full_right_counts += (uint32_t)(int32_t)(RIGHT_ENCODER_SIGN * right_encoder_delta);
 
 
         /* =====================================================
@@ -2573,6 +2637,14 @@ void HAL_TIM_PeriodElapsedCallback(
         /* =====================================================
          * LEFT PI CONTROL
          * ===================================================== */
+
+        /* Keep encoder/RPM updates alive while paused. Otherwise old RPM or
+         * accumulated counts would move Jetson odometry during/after a stop.
+         */
+        if (emergency_stop || !FullRun_Allowed(&full_run)) {
+            Motor_Brake_On();
+            return;
+        }
 
         if (left_target_rpm >
             0.0f)
@@ -2753,6 +2825,16 @@ void HAL_GPIO_EXTI_Callback(
 
 void Error_Handler(void)
 {
+    emergency_stop = 1;
+    full_run.fault = 2;
+    left_target_rpm = right_target_rpm = 0.0f;
+    drive_enable_request = 0;
+    /* Stop PWM/brake before disabling IRQs. A frozen peripheral must not
+     * leave the last running PWM active. Guard pre-timer startup failures.
+     */
+    HAL_GPIO_WritePin(LEFT_BRK_GPIO_Port, LEFT_BRK_Pin, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(RIGHT_BRK_GPIO_Port, RIGHT_BRK_Pin, GPIO_PIN_SET);
+    if (htim1.Instance != NULL) Motor_Brake_On();
     __disable_irq();
 
 

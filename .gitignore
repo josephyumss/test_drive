@@ -21,6 +21,7 @@ logs/
 .run/
 .runtime/
 config/runtime.env
+config/full_run.env
 rosbag2_*/
 *.db3
 *.mcap

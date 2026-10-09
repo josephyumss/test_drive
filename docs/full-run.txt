@@ -1,0 +1,256 @@
+FULL RUN: continuous button-controlled YOLO + LiDAR + side ultrasound
+
+Entry point: scripts/start_full_run.sh
+Controller: scripts/full_run_controller.py and jetson/amr_core/full_run.py
+Configuration: config/full_run.json (all lengths in metres)
+
+Deployment prerequisites
+
+This is a Jetson + STM32 change, not just a replacement shell script. The previous
+robot run used MCU_OPEN_LOOP=1 because STM32 status was not reaching Jetson.
+Full run intentionally requires the live return channel. Missing status or old
+firmware will be recorded and keep the robot stationary; there is no open-loop
+fallback. An actual robot test has not been performed in the development PC.
+
+1. Copy the entire project to Jetson, keeping the directory structure.
+2. In the actual STM32 CubeIDE project, replace its ASCII firmware main.c with
+   stm32/Core/Src/main.c and add stm32/Core/Inc/full_run_control.h beside main.h.
+   Build/flash the STM32 with its existing HAL/CubeMX files. The separate
+   stm32/CubeMX/main.c example and binary-protocol app_integration are not the
+   full-run firmware. No flashed firmware image is supplied: the MCU target and
+   full CubeIDE project are not present here.
+3. Wire STM32 USART1 RX <- Jetson THS1 TX for commands, STM32 USART3 TX -> Jetson
+   THS2 RX for status, with common GND. Override ports in config/full_run.env
+   (copy config/full_run.env.example) when the existing robot wiring differs.
+4. Side HC-SR04 sensors connect directly to the Jetson BOARD-numbered header:
+   left TRIG=33 ECHO=31; right TRIG=7 ECHO=15. Existing level shifting must bring
+   ECHO down to the Jetson's GPIO voltage. Confirm that these header pins are
+   configured for GPIO on the actual carrier board. The Python package cannot
+   correct carrier-board wiring or pinmux automatically.
+5. Run: sudo bash scripts/setup_full_run.sh
+   This prepares software only and does not flash or start movement.
+   It attempts independent installation/check stages even after another stage
+   fails. It returns nonzero if anything failed or was blocked; do not treat
+   reaching the final line as successful installation. See "Setup diagnostics".
+6. Run: sudo bash scripts/start_full_run.sh --check
+   This checks files/imports/device access/configuration only.
+7. Run: sudo bash scripts/start_full_run.sh --preflight-only
+   This starts the actual devices and requires fresh YOLO, LiDAR, $CTRL and both
+   GPIO worker samples, while enforcing zero RPM even if UP is pressed. Success
+   does not prove that NO_ECHO represents open space rather than a disconnected
+   ultrasonic sensor: both cause no rising edge. Point a known object at each
+   sensor and inspect VALID readings in the log to confirm physical operation.
+8. Run: sudo bash scripts/start_full_run.sh
+   Wait for READY in logs/full_run/latest/controller.log, then press UP.
+
+Manual stop/restart and automatic boot
+
+Foreground: Ctrl+C sends stop/brake commands and cleans up owned processes.
+From another terminal: sudo bash scripts/start_full_run.sh --stop
+Restart: sudo bash scripts/start_full_run.sh
+Stop validates PID start time and actual script path to avoid signalling reused
+PIDs. Starting a second full run, or taking a serial port/container from another
+launcher, is refused. The controller checks its launcher's PID/start time and
+stops if that launcher vanishes. A lost controller is also stopped by the STM32
+command watchdog (current main.c: 800ms). SIGKILL prevents shell cleanup; use
+systemctl stop for a service or normal Ctrl+C/--stop for manual processes.
+An entirely new process discards the old path, resets
+requested speed to zero via a fresh session and requires a new UP press.
+
+To enable at power-on:
+  sudo systemctl disable --now amr-core.service   # only if previously installed
+  sudo bash scripts/install_full_run_service.sh
+  sudo systemctl start amr-full-run.service
+
+The installer substitutes this checkout's absolute path into the supplied unit,
+validates it and enables it for the next boot. It refuses an enabled/active old
+amr-core.service, which would compete for the same devices. It does not start
+the robot during installation. The unit runs as root to access UART/GPIO/Docker.
+An automatic process restart still resets to READY/zero and needs UP.
+
+Service commands:
+  sudo systemctl stop amr-full-run.service
+  sudo systemctl start amr-full-run.service
+  sudo systemctl status amr-full-run.service
+  sudo journalctl -u amr-full-run.service -b --no-pager
+
+After stopping the service, the same foreground command is usable manually.
+If systemd reached its restart limit, use systemctl reset-failed before start.
+
+Buttons and stopping
+
+PA4 UP: new debounced press adds 5 RPM; 0 -> 5 starts motion after READY.
+PB7 DOWN short press/release: subtracts 5 RPM, minimum zero. Zero pauses.
+PB7 DOWN held >=800ms: immediately brakes at that moment, saves selected speed.
+Release and press UP to resume that saved speed. While held, UP is ignored.
+The repository has no identified separate physical instant-stop GPIO; long
+DOWN provides the function using the known buttons. $CMD,0,0,1 also represents
+a user instant stop in full-run mode. A separate hardware stop must be bound
+to FullRun_InstantStop if its actual pin becomes known.
+
+Speeds: 0/5/10/15/20 RPM, per-wheel limit 20; entry cap 12, passing cap 16,
+return cap 14, always also limited by user RPM. Normal speed changes ramp in
+the Jetson; STM32 immediately enforces a lower user cap and zero-stop gate.
+Wheel commands are scaled together to preserve turn curvature.
+Front stop/resume thresholds are measured from the front bumper across the
+full 90cm body width plus lateral margin, using calibrated LiDAR points; the
+raw radial front range is also retained in snapshots for diagnosis.
+
+User zero/instant stop and temporary blocked-space stops preserve phase, exact
+curve/follower progress, frozen obstacle, baseline, seen/tail state and rear
+distance. Pose tracking continues; phase timers and tail counters pause. A
+fresh UP is required after hazards clear. A blocked UP is consumed and never
+causes a later automatic departure. Persistent sensor/communication/firmware
+faults latch FAULT_STOP and require stopping/restarting after repair.
+
+Avoidance
+
+DRIVE -> STOPPING (0.3s) -> ENTRY curve -> BASELINE (stationary samples) -> PASS
+-> REAR_CLEARANCE -> RETURN curve -> DRIVE, repeated continuously.
+
+YOLO confidence >=0.45, three consecutive frames, matched LiDAR cluster and
+drive-corridor intersection, forward distance <=2m trigger normal avoidance.
+The object and curve are frozen so losing the detection does not lose the plan.
+The tracked point is allowed to move along the frozen object's lateral strip
+for a long face, even after a YOLO ID change. A new object in the passing lane
+is still checked independently, and the front/body clearance guard stays active.
+Choose the opposite side from the object's bearing, subject to lateral and
+diagonal clearance. No safe side produces a recoverable pause. Do not force
+the old minimum 0.65m entry if it would erase the chassis-front clearance;
+insufficient entry room pauses instead. Another object on the saved path pauses
+without overwriting it. UP can resume once that object no longer blocks it.
+
+Passing uses the sensor facing the obstacle (left bypass -> right sensor).
+Save five initial samples, with valid median or NO_ECHO baseline. A close
+echo in (0.30,0.70]m plus matching side LiDAR, or two consecutive close echoes,
+arms side-object tracking. Baseline samples can already arm it if alignment
+ended alongside the object. A thin pole can arm with one corroborated echo.
+
+After arming, require five new far samples (>=0.85m or NO_ECHO) plus side LiDAR
+clearance >=0.85m, after at least 3cm measured motion, to confirm the tail.
+A distant numeric baseline also requires return to at least baseline minus
+10cm. A close baseline may be the obstacle itself, so returning to that same
+close distance never confirms a tail. Raw distance decreases on approach and
+increases on departure; the old displayed 0.0 is not treated as real distance.
+
+Confirmed tail -> extra forward x displacement 0.425+0.15=0.575m for centre
+sensors -> return to original y=0 path. Cumulative encoder counts are used in
+the supplied firmware, including wraparound, so stopping and reversing cannot
+falsely finish the forward clearance. A new close face cancels tail clearance
+and returns to PASS. Three metres without ever seeing the object faults with
+a GPIO/orientation diagnosis; ten metres without a tail pauses. Timers do not
+run while paused. Inside sensor gets three samples for each outside sample,
+with 60ms between triggers; both remain monitored for staleness.
+
+Current measured/estimated geometry
+
+Wheel diameter 0.2032m (drawing says 8 inches); track 0.85m (estimated from
+90cm outside width and 5cm tyre width); outside width 0.90m; length 0.85m.
+Side sensor centre x=0, y=0.25m (body assumed 50cm wide from 20cm protrusion).
+The accepted wider lateral margin is 25cm: expected sensor distance is
+45cm, side stop 30cm, side resume >36cm. Rear margin stays 15cm: extra 57.5cm.
+Encoder counts/output revolution=40000 copied from the current STM32 firmware.
+LiDAR pose defaults to x=0,y=0,yaw=0; camera/LiDAR yaw defaults to 0. Enter real
+mounting offsets in full_run.json. These dimensions/offsets and wheel slip
+affect the actual clearance; the controller logs the exact assumptions.
+
+Setup diagnostics
+
+The same sudo bash scripts/setup_full_run.sh command records each attempt in
+logs/full_run_setup/<UTC time>-<unique suffix>/:
+  launcher.log: all stages' stdout/stderr, UTC start/end and final summary
+  <step>.log: individual apt/ROS/LiDAR/model/Docker/GPIO/check output, failing
+              worker command, source line and exit code
+  stages.tsv / summary.txt: OK, SKIP (already usable), FAILED and BLOCKED results
+  system_before.log / system_after.log: OS/L4T/Python/Docker/package versions
+  source/: the installer, model/Docker helpers, Dockerfile and config used
+  *_reuse_probe.log: failed existing-workspace checks before deciding to rebuild
+
+ROS bridge, LiDAR source/build, model download, Docker image, Jetson.GPIO and
+configuration checks are separate steps. A failed apt index update does not
+prevent trying installation from existing indices. A Docker failure does not
+hide ROS/GPIO/configuration problems. Read-only final checks run even after
+failed installations and report additional missing resources. Multiple Python
+imports are checked individually so one bad module does not hide another.
+
+An unsupported platform/non-root invocation blocks system changes, but still
+records the environment and runs possible read-only checks. A failed build-user
+context blocks user-owned builds; a failed LiDAR clone blocks its build; a failed
+Docker daemon check blocks its runtime/image build. These are explicitly BLOCKED,
+not success. This is not blind continuation of commands with invalid inputs.
+The failing step itself stops at its first command failure, then the runner
+attempts the next independent step. Impossible downstream work cannot reveal
+all of its potential errors until its prerequisites are repaired.
+
+At the end of a failed/incomplete attempt, an automatic archive containing ALL
+attempted stages is saved as logs/full_run_setup/<time>-<suffix>-debug.tar.gz.
+The combined log writer is flushed before compression. If Python packaging is
+unavailable, tar is used as a fallback. Original logs and previous attempts are
+preserved. Disk/permission errors preventing log creation/writes, or Ctrl+C/
+SIGTERM, can prevent completing every step; the attempt is marked incomplete.
+After repairs rerun the same setup command; usable packages/workspaces/model/
+image/GPIO imports are reused. No services/motors are started by this setup.
+The original setup_yolo_lidar_path_avoidance.sh keeps its fail-fast behaviour.
+
+Record format and debugging
+
+Each invocation creates logs/full_run/<UTC time>-<unique suffix>/.
+latest links to the last successfully owned live run (checks do not replace it).
+  launcher.log: dependency checks, shell line/command failures, child exit codes
+  controller.log: state/phase changes, refusal reasons and Python stack traces
+  events.jsonl*: UTC + monotonic timestamp, raw scans/YOLO/UART/echo pulses,
+                 wheel TX and heartbeat gaps, 10Hz pose/status/phase snapshots,
+                 frozen geometry, path control points and counter progress
+  lidar.log / bridge.log / yolo.log: each child process's stdout/stderr
+  shutdown.log: independent fallback stop command result
+  config.json / system.txt / source.sha256 / source.tar.gz: exact configuration,
+                 board/package/device metadata and source snapshot for this run
+
+JSONL uses 16MiB files with 24 backups (~400MiB maximum per invocation).
+Old run directories are preserved, not deleted automatically. GPIO NO_ECHO,
+stuck-high, too-short pulse and missing-edge timeouts are logged distinctly.
+There is no camera-video recording or claim that software can determine wiring
+faults from no echo alone. Rotation/write failures stop the controller.
+
+Debug bundles are now automatic when running start_full_run.sh:
+  - Startup/dependency/configuration errors: archive the failed attempt's log.
+  - FAULT_STOP (even when the controller remains alive): archive in a separate
+    process after zero RPM is sent, without blocking the motor heartbeat.
+  - Sensor/controller process crashes, exceptions or forced shutdown: archive
+    after motors and owned processes have stopped.
+Normal READY, user pause/instant stop, blocked-space pause, Ctrl+C and normal
+--stop do not trigger an archive unless a fault already occurred in that run.
+There is one automatic <UTC time>-<suffix>-debug.tar.gz per failed invocation
+in logs/full_run/. The path is printed as [BUNDLE] Saved in launcher.log.
+auto_bundle.request.json preserves the first reason; auto_bundle.status.json
+records successful completion. A completed automatic archive is preserved so
+later fault-state log rotation cannot overwrite the evidence of the first fault.
+Files are published atomically; incomplete compression is never presented as
+a completed archive. bundle_metadata.json records capture times and the exact
+prefix size captured from each live log. Original logs are never removed.
+If compression fails (for example, full disk), inspect bundle.log; shutdown
+retries a failed background capture. A successful capture is not repeated.
+The service allows 120 seconds for shutdown/compression; motors stop first.
+
+Summary: python3 scripts/full_run_diagnostics.py
+Optional manual fresh snapshot: sudo python3 scripts/full_run_diagnostics.py --bundle
+Send the automatically saved *-debug.tar.gz file for diagnosis, including all components.
+For an early launcher failure (before latest changes), supply its printed log
+directory as the diagnostics argument. No secrets/environment dump is included.
+
+Hardware-free checks on a Linux checkout:
+  python3 -m unittest discover -s tests -p 'test_full_run*.py' -v
+  cmake -S stm32 -B .runtime/stm32-tests
+  cmake --build .runtime/stm32-tests
+  ctest --test-dir .runtime/stm32-tests --output-on-failure
+
+These use fake serial/GPIO/ROS and process stubs. They do not issue real robot
+commands. Development-PC tests cover the core and adapter plus host C button
+logic; Linux process-group tests are supplied but were not executed on that PC
+because WSL could not start (Hyper-V feature unavailable).
+The old one-shot controller's ideal-wheel test currently has an 8.27cm return
+offset against its 8cm expectation after the earlier chassis-size update; it is
+not used by start_full_run.sh. The new full-run geometric return tests use the
+8cm tolerance and pass. The one-shot launcher's original behavior is preserved.
+
+GPIO API/installation reference: https://github.com/NVIDIA/jetson-gpio

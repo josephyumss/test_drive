@@ -15,12 +15,17 @@ if [[ ! -s "$MODEL_PATH" ]]; then
 fi
 
 extra_args=()
+runtime_labels=()
+if [[ -n "${YOLO_RUNTIME_OWNER:-}" ]]; then
+  runtime_labels+=(--label "amr.full_run.owner=$YOLO_RUNTIME_OWNER")
+fi
 if [[ "$YOLO_HALF" == "1" ]]; then
   extra_args+=(--half)
 fi
 
 docker run --rm \
   --name socialguide-amr-yolo \
+  "${runtime_labels[@]}" \
   --privileged \
   --runtime=nvidia \
   --network=host \
