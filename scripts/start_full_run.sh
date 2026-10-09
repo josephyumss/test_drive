@@ -72,6 +72,10 @@ MCU_DEVICE="${MCU_DEVICE:-/dev/ttyTHS1}"
 MCU_STATUS_DEVICE="${MCU_STATUS_DEVICE:-/dev/ttyTHS2}"
 MCU_BAUDRATE="${MCU_BAUDRATE:-115200}"
 MCU_PROTOCOL="${MCU_PROTOCOL:-legacy}"
+SIDE_SENSOR_SOURCE="${SIDE_SENSOR_SOURCE:-mcu}"
+[[ "$SIDE_SENSOR_SOURCE" == mcu || "$SIDE_SENSOR_SOURCE" == gpio ]] || {
+    echo '[FAIL] SIDE_SENSOR_SOURCE must be mcu or gpio' >&2; exit 1;
+}
 MCU_STATUS_COMMAND_FALLBACK="${MCU_STATUS_COMMAND_FALLBACK:-1}"
 [[ "$MCU_STATUS_COMMAND_FALLBACK" == 0 || "$MCU_STATUS_COMMAND_FALLBACK" == 1 ]] || {
     echo '[FAIL] MCU_STATUS_COMMAND_FALLBACK must be 0 or 1' >&2; exit 1;
@@ -79,6 +83,7 @@ MCU_STATUS_COMMAND_FALLBACK="${MCU_STATUS_COMMAND_FALLBACK:-1}"
 LIDAR_DEVICE="${LIDAR_DEVICE:-/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0}"
 FULL_RUN_CONFIG="${FULL_RUN_CONFIG:-$PROJECT_DIR/config/full_run.json}"
 export MCU_DEVICE MCU_STATUS_DEVICE MCU_BAUDRATE MCU_PROTOCOL MCU_STATUS_COMMAND_FALLBACK
+export SIDE_SENSOR_SOURCE
 export LIDAR_DEVICE FULL_RUN_CONFIG ROS_SETUP JETSON_SETUP
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}" ROS_LOCALHOST_ONLY="${ROS_LOCALHOST_ONLY:-0}"
 export PYTHONPATH="$PROJECT_DIR${PYTHONPATH:+:$PYTHONPATH}" PYTHONUNBUFFERED=1
@@ -124,7 +129,8 @@ for file in "$ROS_SETUP" "$JETSON_SETUP" "$LIDAR_SETUP"; do
 done
 set -u
 if command -v "$PYTHON_BIN" >/dev/null 2>&1; then
-    "$PYTHON_BIN" "$PROJECT_DIR/scripts/full_run_controller.py" --config "$FULL_RUN_CONFIG" --log-dir "$LOG_DIR" --check-config \
+    "$PYTHON_BIN" "$PROJECT_DIR/scripts/full_run_controller.py" --config "$FULL_RUN_CONFIG" --log-dir "$LOG_DIR" \
+        --mcu-protocol "$MCU_PROTOCOL" --side-sensor-source "$SIDE_SENSOR_SOURCE" --check-config \
         || check_fail 'Full-run configuration validation failed'
     "$PYTHON_BIN" "$PROJECT_DIR/scripts/full_run_requirements.py" > "$LOG_DIR/imports.json" 2> "$LOG_DIR/imports.log" \
         || check_fail 'Python/ROS/GPIO imports or installed-source identity failed; see imports.json and imports.log'
@@ -139,7 +145,7 @@ if command -v docker >/dev/null 2>&1; then
 fi
 [[ "$MCU_PROTOCOL" == legacy || "$MCU_PROTOCOL" == ctrl ]] || check_fail 'MCU_PROTOCOL must be legacy or ctrl'
 (( check_errors == 0 )) || fail "$check_errors independent startup checks failed. No robot processes were started."
-echo "[INFO] command=$MCU_DEVICE status=$MCU_STATUS_DEVICE command_RX_fallback=$MCU_STATUS_COMMAND_FALLBACK lidar=$LIDAR_DEVICE mode=$MODE protocol=$MCU_PROTOCOL"
+echo "[INFO] command=$MCU_DEVICE status=$MCU_STATUS_DEVICE command_RX_fallback=$MCU_STATUS_COMMAND_FALLBACK side_sensors=$SIDE_SENSOR_SOURCE lidar=$LIDAR_DEVICE mode=$MODE protocol=$MCU_PROTOCOL"
 echo '[INFO] Default legacy uses existing $CMD/$STATUS, without a firmware update. Live status RX is required; no open-loop fallback.'
 [[ "$MODE" != --check ]] || { echo '[CHECK] Installation/configuration passed; live sensors and firmware not checked.'; exit 0; }
 
@@ -215,7 +221,12 @@ sha256sum "$PROJECT_DIR"/scripts/*full_run* "$PROJECT_DIR"/jetson/amr_core/full_
     docker version
     df -h "$LOG_DIR"
     [[ ! -r /proc/device-tree/model ]] || tr '\0' '\n' < /proc/device-tree/model
-    "$PYTHON_BIN" -c 'import Jetson.GPIO as g, serial, rclpy; print("GPIO", getattr(g,"VERSION", "unknown")); print("GPIO board", getattr(g,"JETSON_INFO", {})); print("pyserial", serial.__version__); print("ROS", rclpy.__file__)'
+    "$PYTHON_BIN" -c 'import serial, rclpy; print("pyserial", serial.__version__); print("ROS", rclpy.__file__)'
+    if [[ "$SIDE_SENSOR_SOURCE" == gpio ]]; then
+        "$PYTHON_BIN" -c 'import Jetson.GPIO as g; print("GPIO", getattr(g,"VERSION", "unknown")); print("GPIO board", getattr(g,"JETSON_INFO", {}))'
+    else
+        echo 'Side sensors: STM32 STATUS centimetres; no Jetson GPIO import/owner.'
+    fi
     printf 'ROS_DOMAIN_ID=%s ROS_LOCALHOST_ONLY=%s\n' "$ROS_DOMAIN_ID" "$ROS_LOCALHOST_ONLY"
 } > "$LOG_DIR/system.txt" 2>&1
 sensor_pids=()
@@ -303,7 +314,7 @@ printf '%s %s\n' "$$" "$(awk '{print $22}' "/proc/$$/stat")" > "$RUN_DIR/full_ru
 # Start the zero-RPM controller before sensor warmup. It owns the only actuator
 # UART and keeps the STM32 heartbeat alive during YOLO initialization.
 args=(--config "$FULL_RUN_CONFIG" --port "$MCU_DEVICE" --status-port "$MCU_STATUS_DEVICE" \
-      --baudrate "$MCU_BAUDRATE" --mcu-protocol "$MCU_PROTOCOL" --log-dir "$LOG_DIR" --supervisor-pid "$$" \
+      --baudrate "$MCU_BAUDRATE" --mcu-protocol "$MCU_PROTOCOL" --side-sensor-source "$SIDE_SENSOR_SOURCE" --log-dir "$LOG_DIR" --supervisor-pid "$$" \
       --user-stop-file "$RUN_DIR/full_run.user_stop.json" \
       --supervisor-start-ticks "$(awk '{print $22}' "/proc/$$/stat")")
 [[ "$MODE" != --preflight-only ]] || args+=(--preflight-only)

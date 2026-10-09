@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 from jetson.amr_core.full_run import FullRunConfig, FullRunController, SideReading
-from jetson.amr_core.full_run_legacy import LegacyControlAdapter
+from jetson.amr_core.full_run_legacy import LegacyControlAdapter, LegacyStatusLayoutChanged, validate_legacy_status
 from jetson.amr_core.full_run_user_stop import request_stop, read_stop_request, process_start_ticks
 
 
@@ -114,6 +114,94 @@ class LegacyAdapterTests(unittest.TestCase):
         self.assertIsNone(normalized.right_counts)
         self.assertEqual(self.adapter.snapshot()["clock"], "Jetson_receive_time")
         self.assertEqual(self.adapter.snapshot()["button_events"], "inferred_from_base_RPM")
+
+
+class CompactLegacyAdapterTests(unittest.TestCase):
+    def setUp(self):
+        self.events = []
+        self.adapter = LegacyControlAdapter(123, emit=lambda event, **data: self.events.append((event, data)))
+        self.now = 100.0
+
+    def feed(self, base=0, left=0, right=0, allow_controls=True):
+        self.now += .10
+        return self.adapter.decode(f"$STATUS,{base},{left},{right},-1,-1,80", self.now,
+                                   allow_controls=allow_controls)
+
+    def test_confirmed_positions_and_absent_fields_are_not_fabricated(self):
+        raw = validate_legacy_status("$STATUS,30,12,-13,35,40,80")
+        self.assertEqual((raw.base_rpm, raw.left_rpm, raw.right_rpm), (30, 12, -13))
+        self.assertEqual((raw.left_us_cm, raw.right_us_cm, raw.sharp_distance_cm), (35, 40, 80))
+        for name in ("emergency", "left_target_rpm", "right_target_rpm", "left_pwm", "right_pwm", "sharp_adc"):
+            self.assertIsNone(getattr(raw, name))
+
+    def test_old_base_is_ignored_and_new_UP_DOWN_control_speed(self):
+        self.assertEqual(self.feed(30).base_rpm, 0)
+        self.assertEqual(self.feed(35).base_rpm, 5)
+        self.assertEqual(self.feed(40).base_rpm, 10)
+        self.assertEqual(self.feed(30).base_rpm, 0)
+
+    def test_real_RPM_is_used_not_confused_with_ultrasonic_minus_one(self):
+        result = self.feed(0, left=12, right=13)
+        self.assertEqual((result.left_rpm, result.right_rpm), (12, 13))
+        self.assertEqual(self.adapter.raw.left_us_cm, -1)
+        self.assertIsNone(self.adapter.snapshot()["MCU_ESTOP"])
+        self.assertFalse(self.adapter.snapshot()["MCU_command_ACK_available"])
+
+    def test_zero_feedback_without_a_host_zero_write_cannot_release_stop_barrier(self):
+        self.feed()
+        self.feed(10)
+        self.adapter.request_instant_stop()
+        for _ in range(5):
+            self.assertEqual(self.feed(10).stop_flags, 2)
+        self.assertTrue(self.adapter.await_zero_command)
+
+    def test_stop_waits_for_three_zero_samples_and_discards_queued_UP(self):
+        self.feed()
+        self.feed(10)
+        self.adapter.request_instant_stop()
+        self.adapter.note_command_written(0, 0, 0, self.now)
+        self.assertEqual(self.feed(15).stop_flags, 2)
+        self.assertEqual(self.feed(15).stop_flags, 2)
+        self.assertEqual(self.feed(15).stop_flags, 2)
+        self.assertFalse(self.adapter.await_zero_command)
+        self.assertEqual(self.feed(15).stop_flags, 2)
+        resumed = self.feed(20)
+        self.assertEqual((resumed.base_rpm, resumed.stop_flags), (10, 0))
+        self.assertTrue(any(e == "legacy_stop_standstill_observed" for e, _ in self.events))
+        self.assertFalse(any(e == "legacy_stop_acknowledged" for e, _ in self.events))
+
+    def test_coasting_RPM_resets_standstill_count(self):
+        self.feed()
+        self.adapter.request_instant_stop()
+        self.adapter.note_command_written(0, 0, 0, self.now)
+        self.feed()
+        self.feed(left=2)
+        self.assertEqual(self.adapter.zero_rpm_samples, 0)
+        self.assertTrue(self.adapter.await_zero_command)
+        for _ in range(3):
+            self.feed()
+        self.assertFalse(self.adapter.await_zero_command)
+
+    def test_batched_identical_frames_do_not_count_as_independent_zero_samples(self):
+        self.feed()
+        self.adapter.request_instant_stop()
+        self.adapter.note_command_written(0, 0, 0, self.now)
+        self.now += .01
+        for _ in range(30):
+            self.adapter.decode("$STATUS,0,0,0,-1,-1,80", self.now)
+        self.assertEqual(self.adapter.zero_rpm_samples, 1)
+        self.assertTrue(self.adapter.await_zero_command)
+
+    def test_format_changes_are_not_silently_mixed_with_button_state(self):
+        self.feed()
+        with self.assertRaises(LegacyStatusLayoutChanged):
+            self.adapter.decode(status_line(), self.now)
+
+    def test_malformed_RPM_and_ranges_never_become_valid_zero(self):
+        for line in ("$STATUS,0,NaN,0,-1,-1,80", "$STATUS,0,1001,0,-1,-1,80",
+                     "$STATUS,0,0,0,-2,-1,80", "$STATUS,3,0,0,-1,-1,80"):
+            with self.subTest(line=line), self.assertRaises(ValueError):
+                validate_legacy_status(line)
 
 
 class LegacyCoreTests(unittest.TestCase):

@@ -542,7 +542,7 @@ class FullRunController:
             if self.phase == "PASS":
                 distance = self.odom.distance_travelled_m - self.pass_start
                 if not self.side_seen and distance > self.c.seek_max_distance_m:
-                    self.fault("side_obstacle_never_seen_check_GPIO_sensor_orientation")
+                    self.fault("side_obstacle_never_seen_check_sensor_source_wiring_orientation")
                 elif distance > self.c.pass_max_distance_m:
                     self.pause("pass_distance_limit")
                     self.pass_start = self.odom.distance_travelled_m

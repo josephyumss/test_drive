@@ -47,7 +47,7 @@ class InventoryTests(unittest.TestCase):
     def test_every_failed_import_is_recorded(self):
         with mock.patch.object(requirements.importlib, "import_module", side_effect=ImportError("missing")):
             report = requirements.verify_imports()
-        self.assertEqual(len(report), 7)
+        self.assertEqual(len(report), 6)
         self.assertTrue(all(not r["ok"] and "ImportError" in r["traceback"] for r in report))
 
     def test_old_installed_bridge_is_rejected_while_other_imports_are_reported(self):
@@ -64,6 +64,13 @@ class InventoryTests(unittest.TestCase):
             self.assertTrue(all(r["ok"] for r in report[:-1]))
             self.assertFalse(report[-1]["ok"])
             self.assertNotEqual(report[-1]["expected_sha256"], report[-1]["installed_sha256"])
+
+    def test_STM32_side_mode_does_not_require_Jetson_GPIO_import(self):
+        with mock.patch.dict("os.environ", {"SIDE_SENSOR_SOURCE": "mcu"}), \
+                mock.patch.object(requirements.importlib, "import_module", side_effect=ImportError("missing")) as imports:
+            report = requirements.verify_imports()
+        self.assertFalse(any(r["name"] == "Jetson.GPIO" for r in report))
+        self.assertFalse(any(c.args[0] == "Jetson.GPIO" for c in imports.call_args_list))
 
 
 class GpioDiagnosticsTests(unittest.TestCase):

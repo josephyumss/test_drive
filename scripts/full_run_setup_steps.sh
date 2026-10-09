@@ -14,6 +14,7 @@ export DEBIAN_FRONTEND=noninteractive LC_ALL=C.UTF-8 LANG=C.UTF-8
 # Match the working fused/integrated launchers and the full-run boot launcher.
 # Jetson.GPIO 2.1.7 supports this fallback when its device-tree match fails.
 export JETSON_MODEL_NAME="${JETSON_MODEL_NAME:-JETSON_ORIN_NANO}"
+export SIDE_SENSOR_SOURCE="${SIDE_SENSOR_SOURCE:-mcu}"
 if [[ -f "${FULL_RUN_SETUP_CONTEXT:-}" && "$STEP" != user_context ]]; then
     source "$FULL_RUN_SETUP_CONTEXT"
 fi
@@ -216,6 +217,7 @@ yolo_image() {
     /bin/bash "$PROJECT_DIR/scripts/build_yolo_docker.sh"
 }
 jetson_gpio() {
+    [[ "$SIDE_SENSOR_SOURCE" != mcu ]] || already 'Side sensors are on STM32; Jetson.GPIO is not a runtime dependency.'
     require_command "$PYTHON_BIN"
     echo "[GPIO] JETSON_MODEL_NAME=$JETSON_MODEL_NAME"
     if "$PYTHON_BIN" -c 'import Jetson.GPIO'; then already 'Jetson.GPIO import passed.'; fi
@@ -239,7 +241,12 @@ import sys
 import traceback
 failed = []
 print(f"[GPIO] JETSON_MODEL_NAME={os.environ.get('JETSON_MODEL_NAME')}", flush=True)
-for name in ("serial", "numpy", "yaml", "cv2", "Jetson.GPIO"):
+source = os.environ.get("SIDE_SENSOR_SOURCE", "mcu")
+print(f"[SIDE SENSORS] source={source}", flush=True)
+names = ["serial", "numpy", "yaml", "cv2"]
+if source == "gpio":
+    names.append("Jetson.GPIO")
+for name in names:
     try:
         module = importlib.import_module(name)
         version = getattr(module, '__version__', getattr(module, 'VERSION', 'unknown'))
@@ -309,7 +316,7 @@ verify_yolo_image() { require_command docker; docker image inspect socialguide-a
 configuration() {
     require_command "$PYTHON_BIN"
     "$PYTHON_BIN" "$PROJECT_DIR/scripts/full_run_controller.py" --config "$PROJECT_DIR/config/full_run.json" \
-        --log-dir "$FULL_RUN_SETUP_LOG_DIR/config-check" --check-config
+        --log-dir "$FULL_RUN_SETUP_LOG_DIR/config-check" --side-sensor-source "$SIDE_SENSOR_SOURCE" --check-config
 }
 
 case "$STEP" in

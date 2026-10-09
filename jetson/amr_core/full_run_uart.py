@@ -1,6 +1,6 @@
 """Bounded RX discovery on the two already-owned MCU UARTs; never writes."""
 from .full_run import ControlStatus
-from .full_run_legacy import validate_legacy_status
+from .full_run_legacy import UnsupportedLegacyStatus, validate_legacy_status
 
 
 class StatusReceiver:
@@ -18,6 +18,7 @@ class StatusReceiver:
                              "invalid_frames": 0, "overflows": 0, "other_protocol_frames": 0,
                              "last_rx_s": None, "last_valid_s": None, "last_line": None}
                       for port, _ in self.sources}
+        self.schemas = {port: {} for port, _ in self.sources}
         for port, uart in self.sources:
             uart.reset_input_buffer()
             self.emit("uart_open", port=port, role="configured_status" if port == status_port else "command_RX_fallback",
@@ -63,6 +64,27 @@ class StatusReceiver:
                     except ValueError as exc:
                         stats["invalid_frames"] += 1
                         self.emit("uart_candidate_invalid", port=port, line=decoded, error=str(exc))
+                        if isinstance(exc, UnsupportedLegacyStatus):
+                            values = decoded.strip().split(",")[1:]
+                            # Repeated complete integer-shaped frames indicate
+                            # a different layout, not a partial serial read. Do
+                            # not guess what the numbers mean or decode them as
+                            # wheel/button/stop data.
+                            numeric = False
+                            if all(len(v) <= 64 for v in values):
+                                try:
+                                    [int(v) for v in values]
+                                    numeric = True
+                                except ValueError:
+                                    pass
+                            key = str(exc.received_fields)
+                            if (numeric and values
+                                    and (key in self.schemas[port] or len(self.schemas[port]) < 32)):
+                                schema = self.schemas[port].setdefault(key, {
+                                    "field_count": exc.received_fields, "frames": 0,
+                                    "first_seen_s": now, "last_seen_s": now, "raw_values": None})
+                                schema["frames"] += 1
+                                schema["last_seen_s"], schema["raw_values"] = now, values
                 elif decoded.startswith(("$STATUS", "$CTRL")):
                     stats["other_protocol_frames"] += 1
             batches[port] = lines
@@ -80,16 +102,29 @@ class StatusReceiver:
         # not be hidden by unrelated/stale traffic on a different UART.
         return batches.get(self.active_port, []), self.active_port in overflows
 
+    def unsupported_layout(self, minimum_frames=5):
+        if self.active_port is not None or self.protocol != "legacy":
+            return None
+        for port, _ in self.sources:
+            for schema in self.schemas[port].values():
+                if schema["frames"] >= minimum_frames:
+                    return {"port": port, **schema, "expected_field_counts": [7, 11],
+                            "values_semantics": "unknown_requires_actual_STM32_STATUS_transmit_definition"}
+        return None
+
     def snapshot(self, now):
         ports = {}
         for port, values in self.stats.items():
             ports[port] = dict(values, buffered_bytes=len(self.buffers[port]))
+            ports[port]["unsupported_layouts"] = self.schemas[port]
             ports[port]["rx_age_s"] = None if values["last_rx_s"] is None else now - values["last_rx_s"]
             ports[port]["valid_age_s"] = None if values["last_valid_s"] is None else now - values["last_valid_s"]
         if self.active_port:
             diagnosis = "validated_status_source_selected"
         elif not any(v["rx_bytes"] for v in self.stats.values()):
             diagnosis = "no_RX_bytes_verify_STM32_TX_to_Jetson_RX_port_wiring_common_GND_and_MCU_power"
+        elif self.unsupported_layout():
+            diagnosis = "MCU_STATUS_received_but_deployed_schema_does_not_match_supported_7_or_11_fields"
         elif any(v["other_protocol_frames"] for v in self.stats.values()):
             diagnosis = "received_other_MCU_protocol_check_MCU_PROTOCOL"
         elif any(v["invalid_frames"] for v in self.stats.values()):

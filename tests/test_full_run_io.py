@@ -14,7 +14,8 @@ import unittest
 from unittest import mock
 
 from jetson.amr_core.full_run import FullRunConfig, SideReading
-from jetson.amr_core.full_run_ultrasonic import UltrasonicWorker
+from jetson.amr_core.full_run_ultrasonic import UltrasonicWorker, McuUltrasonicFeed
+from jetson.amr_core.full_run_legacy import validate_legacy_status
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("full_run_adapter_test", ROOT / "scripts/full_run_controller.py")
@@ -85,11 +86,59 @@ class EchoTests(unittest.TestCase):
         self.assertEqual(reading.status, "FAULT")
 
 
+class McuSideFeedTests(unittest.TestCase):
+    def setUp(self):
+        self.events = []
+        self.feed = McuUltrasonicFeed(FullRunConfig(), lambda event, **data: self.events.append((event, data)))
+
+    def reading(self, left, right):
+        raw = validate_legacy_status(f"$STATUS,0,0,0,{left},{right},80")
+        self.assertTrue(self.feed.update(raw, 100))
+        return self.feed.results.get_nowait(), self.feed.results.get_nowait()
+
+    def test_actual_centimetres_become_correct_side_metres(self):
+        left, right = self.reading(35, 140)
+        self.assertEqual((left.side, right.side), ("left", "right"))
+        self.assertEqual((left.status, right.status), ("VALID", "VALID"))
+        self.assertAlmostEqual(left.distance_m, .35)
+        self.assertAlmostEqual(right.distance_m, 1.40)
+        self.assertFalse(self.feed.snapshot()["Jetson_GPIO_owner"])
+
+    def test_minus_one_is_ambiguous_NO_ECHO_not_zero_distance(self):
+        for reading in self.reading(-1, -1):
+            self.assertEqual(reading.status, "NO_ECHO")
+            self.assertIsNone(reading.distance_m)
+            self.assertIn("ambiguous", reading.detail)
+
+    def test_zero_or_dangerously_short_echo_is_a_fault(self):
+        for reading in self.reading(0, 1):
+            self.assertEqual(reading.status, "FAULT")
+
+    def test_above_configured_range_is_distinct_from_numeric_zero(self):
+        for reading in self.reading(301, 400):
+            self.assertEqual(reading.status, "NO_ECHO")
+            self.assertGreater(reading.distance_m, 3)
+            self.assertIn("outside", reading.detail)
+
+    def test_old_format_cannot_fabricate_missing_MCU_side_distances(self):
+        raw = validate_legacy_status("$STATUS,0,1234,45,0,0,0,0,0,0,0")
+        self.assertFalse(self.feed.update(raw, 100))
+        self.assertTrue(self.feed.results.empty())
+        self.assertTrue(any(e == "mcu_side_input_invalid" for e, _ in self.events))
+
+    def test_backlogged_STATUS_does_not_create_unbounded_side_queue(self):
+        raw = validate_legacy_status("$STATUS,0,0,0,35,140,80")
+        for n in range(100):
+            self.feed.update(raw, n)
+        self.assertEqual(self.feed.results.qsize(), 64)
+        self.assertTrue(any(e == "ultrasonic_queue_overflow" for e, _ in self.events))
+
+
 class AdapterTests(unittest.TestCase):
     def run_preflight(self, firmware=True, fail_write=False, protocol="ctrl", raw_base=0, same_port=False,
                       live_stop_cycle=None, resume_after_stop=False, initial_emergency=False,
                       status_on_command=False, command_status_fallback=True, fail_cleanup=False,
-                      fail_uart_open=False, fail_shutdown_write=False):
+                      fail_uart_open=False, fail_shutdown_write=False, compact_status=False, unknown_status=False):
         uarts = []
         captured = {}
         class Uart:
@@ -124,9 +173,15 @@ class AdapterTests(unittest.TestCase):
                     if live_stop_cycle is not None:
                         cycle = captured.get("cycle", 0)
                         base = 0 if cycle <= 2 else (15 if resume_after_stop and cycle >= 6 else 10)
+                        if compact_status and resume_after_stop and cycle >= 13:
+                            base = 20
                     emergency = int(initial_emergency and len(self.writes) == 1)
+                    frame = (f"$STATUS,{base},0,0,-1,-1,80\r\n" if compact_status
+                             else f"$STATUS,{base},1234,45,0,0,0,0,0,0,{emergency}\r\n")
+                    if unknown_status:
+                        frame = f"$STATUS,{base},0,0,-1,-1,80,0\r\n"
                     (uarts[0] if status_on_command else uarts[-1]).incoming.extend(
-                        f"$STATUS,{base},1234,45,0,0,0,0,0,0,{emergency}\r\n".encode())
+                        frame.encode())
                 return len(data)
             def close(self):
                 self.closed = True
@@ -150,13 +205,14 @@ class AdapterTests(unittest.TestCase):
             now = time.monotonic()
             core.update_camera([], now)
             core.update_scan([], 4, now)
-            for side in ("left", "right"):
-                captured["worker"].results.put(SideReading(side, now, "NO_ECHO"))
+            if "worker" in captured:
+                for side in ("left", "right"):
+                    captured["worker"].results.put(SideReading(side, now, "NO_ECHO"))
         serial = types.ModuleType("serial")
         serial.Serial = Uart
         ros = types.ModuleType("rclpy")
         ros.init = ros.try_shutdown = lambda: None
-        ros.ok = lambda: live_stop_cycle is None or captured.get("cycle", 0) < 10
+        ros.ok = lambda: live_stop_cycle is None or captured.get("cycle", 0) < (16 if compact_status else 10)
         ros.spin_once = spin_once
         jetson = types.ModuleType("Jetson")
         jetson.__path__ = []
@@ -181,7 +237,7 @@ class AdapterTests(unittest.TestCase):
                     mock.patch.object(adapter, "read_stop_request", side_effect=stop_request), \
                     mock.patch.object(adapter.signal, "signal"), mock.patch("builtins.print"):
                 arguments = ["--config", str(config_path), "--port", "commands", "--status-port", "commands" if same_port else "status",
-                             "--log-dir", folder]
+                             "--log-dir", folder, "--side-sensor-source", "mcu" if compact_status else "gpio"]
                 if live_stop_cycle is None:
                     arguments += ["--preflight-only"]
                 else:
@@ -255,6 +311,44 @@ class AdapterTests(unittest.TestCase):
         self.assertIn("PermissionError", errors[0]["traceback"])
         self.assertEqual(uarts, [])
         self.assertTrue(self.automatic_request)
+
+    def test_actual_compact_packet_passes_preflight_without_firmware_update_or_motion(self):
+        result, uarts, records = self.run_preflight(protocol="legacy", compact_status=True, status_on_command=True)
+        self.assertEqual(result, 0, records)
+        self.assertTrue(any(r["event"] == "ready" for r in records))
+        self.assertFalse(any(r.get("after") == "FAULT_STOP" for r in records))
+        self.assertFalse(any(r["event"] == "MCU_schema_mismatch" for r in records))
+        self.assertTrue(all(m.startswith(b"$CMD,0,0,") for m in uarts[0].writes))
+        self.assertFalse(self.automatic_request)
+        sources = [r for r in records if r["event"] == "side_sensor_source"]
+        self.assertEqual(sources[0]["source"], "STM32_STATUS")
+        self.assertFalse(any(r.get("stage") in ("import_Jetson_GPIO", "initialize_ultrasonic_GPIO") for r in records))
+        sides = [r for r in records if r["event"] == "ultrasonic"]
+        self.assertTrue(sides)
+        self.assertTrue(all(r["source"] == "STM32_STATUS" and r["raw_cm"] == -1 for r in sides))
+
+    def test_unsupported_packet_fails_with_schema_reason_without_motion_or_timeout(self):
+        result, uarts, records = self.run_preflight(protocol="legacy", unknown_status=True, status_on_command=True)
+        self.assertEqual(result, 1)
+        faults = [r for r in records if r.get("after") == "FAULT_STOP"]
+        self.assertTrue(faults)
+        self.assertIn("STM32_STATUS_unsupported_layout", faults[0]["reason"])
+        self.assertIn("received_fields=8", faults[0]["reason"])
+        self.assertNotIn("startup_timeout", faults[0]["reason"])
+        self.assertTrue(any(r["event"] == "MCU_schema_mismatch" for r in records))
+        self.assertTrue(all(m.startswith(b"$CMD,0,0,") for m in uarts[0].writes))
+        self.assertTrue(self.automatic_request)
+
+    def test_compact_terminal_stop_waits_for_standstill_then_new_UP_resumes(self):
+        result, uarts, records = self.run_preflight(protocol="legacy", compact_status=True, status_on_command=True,
+                                                   live_stop_cycle=5, resume_after_stop=True)
+        self.assertEqual(result, 0, records)
+        states = [r["after"] for r in records if r["event"] == "state"]
+        self.assertEqual(states[:4], ["READY", "RUNNING", "PAUSED", "RUNNING"])
+        self.assertTrue(any(r["event"] == "legacy_stop_standstill_observed" for r in records))
+        self.assertTrue(any(r["event"] == "legacy_stop_UP_consumed" for r in records))
+        self.assertFalse(any(r["event"] == "legacy_stop_acknowledged" for r in records))
+        self.assertFalse(self.automatic_request)
 
     def test_cleanup_failure_cannot_be_reported_as_success(self):
         result, uarts, records = self.run_preflight(protocol="legacy", fail_cleanup=True)

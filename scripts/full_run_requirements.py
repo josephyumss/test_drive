@@ -3,6 +3,7 @@
 import hashlib
 import importlib
 import json
+import os
 from pathlib import Path
 import sys
 import traceback
@@ -13,8 +14,11 @@ sys.path.insert(0, str(PROJECT))
 
 def verify_imports(project=PROJECT):
     results = []
-    for name in ("serial", "rclpy", "Jetson.GPIO", "sensor_msgs.msg:LaserScan", "std_msgs.msg:String",
-                 "amr_interfaces.msg:ObstacleInfo", "amr_vision.yolo_udp_bridge_node"):
+    names = ["serial", "rclpy", "sensor_msgs.msg:LaserScan", "std_msgs.msg:String",
+             "amr_interfaces.msg:ObstacleInfo", "amr_vision.yolo_udp_bridge_node"]
+    if os.environ.get("SIDE_SENSOR_SOURCE", "mcu") == "gpio":
+        names.insert(2, "Jetson.GPIO")
+    for name in names:
         entry = {"name": name, "ok": False}
         try:
             module_name, _, attribute = name.partition(":")

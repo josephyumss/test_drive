@@ -10,7 +10,10 @@ IMPORTANT = {"state", "phase", "exception", "resume_denied", "CTRL_invalid", "ST
              "legacy_button_limit", "legacy_initial_speed_ignored", "legacy_instant_stop",
              "user_instant_stop_request", "scan_invalid", "yolo_invalid", "shutdown", "loop_exit",
              "startup_step", "ultrasonic_exception", "gpio_setup", "gpio_cleanup",
-             "uart_open", "uart_status_source", "uart_health", "uart_candidate_invalid", "runtime_health"}
+             "uart_open", "uart_status_source", "uart_health", "uart_candidate_invalid", "runtime_health",
+             "MCU_schema_mismatch"}
+IMPORTANT.update({"legacy_status_format", "legacy_stop_zero_sent", "legacy_stop_standstill_observed",
+                  "side_sensor_source", "mcu_side_input_invalid"})
 
 
 def summarize_run(folder):

@@ -226,7 +226,7 @@ class SetupWorkerTests(unittest.TestCase):
         self.environment = dict(os.environ, PROJECT_DIR=ROOT.as_posix(),
                                 FULL_RUN_SETUP_LOG_DIR=self.folder.as_posix(),
                                 FULL_RUN_SETUP_CONTEXT=(self.folder / "context.env").as_posix(),
-                                PYTHON_BIN=sys.executable.replace("\\", "/"))
+                                PYTHON_BIN=sys.executable.replace("\\", "/"), SIDE_SENSOR_SOURCE="gpio")
         # Bash, not Windows, splits PATH on ':'; construct it in the child.
         self.environment["SETUP_TEST_BIN"] = self.bin_dir.as_posix()
         self.environment["TRACE_FILE"] = (self.folder / "trace.txt").as_posix()
@@ -358,6 +358,15 @@ exit 92
         trace = self.folder.joinpath("trace.txt").read_text().splitlines()
         self.assertTrue(any("-m pip install --no-deps Jetson.GPIO" in line for line in trace))
         self.assertEqual(sum(line.startswith("-c import Jetson.GPIO") for line in trace), 2)
+
+    def test_STM32_side_sensors_skip_unneeded_GPIO_install_and_import(self):
+        self.environment["SIDE_SENSOR_SOURCE"] = "mcu"
+        self.stub("python-test", 'echo "BUG: Python/GPIO install called" >> "$TRACE_FILE"; exit 91\n')
+        self.environment["PYTHON_BIN"] = (self.bin_dir / "python-test").as_posix()
+        result = self.run_worker("jetson_gpio")
+        self.assertEqual(result.returncode, 77, result.stdout)
+        self.assertIn("Side sensors are on STM32", result.stdout)
+        self.assertFalse((self.folder / "trace.txt").exists())
 
 
 if __name__ == "__main__":

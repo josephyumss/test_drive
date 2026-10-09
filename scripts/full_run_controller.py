@@ -21,8 +21,8 @@ sys.path.insert(0, str(PROJECT))
 from jetson.amr_core.full_run import ControlStatus, FullRunConfig, FullRunController
 from jetson.amr_core.full_run_log import FlightRecorder
 from jetson.amr_core.full_run_diagnostics import request_auto_bundle
-from jetson.amr_core.full_run_ultrasonic import UltrasonicWorker
-from jetson.amr_core.full_run_legacy import LegacyControlAdapter
+from jetson.amr_core.full_run_ultrasonic import UltrasonicWorker, McuUltrasonicFeed
+from jetson.amr_core.full_run_legacy import LegacyControlAdapter, LegacyStatusLayoutChanged
 from jetson.amr_core.full_run_user_stop import read_stop_request
 from jetson.amr_core.full_run_uart import StatusReceiver
 from jetson.amr_core.reactive_avoidance import wrap_angle
@@ -128,6 +128,8 @@ def main(arguments=None):
     parser.add_argument("--baudrate", type=int, default=115200)
     parser.add_argument("--mcu-protocol", choices=("legacy", "ctrl"), default="legacy",
                         help="Default legacy uses existing $CMD/$STATUS; no firmware update")
+    parser.add_argument("--side-sensor-source", choices=("mcu", "gpio"), default="mcu",
+                        help="Default mcu: side centimetres in confirmed compact STATUS; gpio only for Jetson-wired sensors")
     parser.add_argument("--no-command-status-fallback", action="store_true",
                         help="Receive telemetry only on --status-port; do not also inspect command UART RX")
     parser.add_argument("--user-stop-file")
@@ -137,15 +139,19 @@ def main(arguments=None):
     parser.add_argument("--check-config", action="store_true")
     parser.add_argument("--preflight-only", action="store_true")
     args = parser.parse_args(arguments)
+    if args.side_sensor_source == "mcu" and args.mcu_protocol != "legacy":
+        parser.error("MCU side sensors require legacy compact STATUS; extended ctrl currently requires gpio")
     config = FullRunConfig.read(args.config)
     if args.check_config:
         print(json.dumps({"configuration": asdict(config), "mcu_protocol": args.mcu_protocol,
+                          "side_sensor_source": args.side_sensor_source,
                           "expected_side_range_m": config.expected_side_range_m,
                           "rear_clearance_m": config.rear_clearance_m}, indent=2))
         return 0
     recorder = FlightRecorder(args.log_dir, config.log_max_bytes, config.log_backup_count)
     recorder.emit("configuration", config=asdict(config), port=args.port, status_port=args.status_port,
                   mcu_protocol=args.mcu_protocol,
+                  side_sensor_source=args.side_sensor_source,
                   command_status_fallback=not args.no_command_status_fallback,
                   argv=sys.argv, python=sys.version, expected_side_range_m=config.expected_side_range_m,
                   rear_clearance_m=config.rear_clearance_m)
@@ -199,8 +205,9 @@ def main(arguments=None):
         import serial
         startup_step("import_ROS")
         import rclpy
-        startup_step("import_Jetson_GPIO")
-        import Jetson.GPIO as GPIO
+        if args.side_sensor_source == "gpio":
+            startup_step("import_Jetson_GPIO")
+            import Jetson.GPIO as GPIO
         startup_step("open_command_UART", requested=args.port, resolved=os.path.realpath(args.port),
                      baudrate=args.baudrate)
         command_uart = serial.Serial(args.port, args.baudrate, timeout=0, write_timeout=0.15, exclusive=True)
@@ -220,8 +227,12 @@ def main(arguments=None):
         signal.signal(signal.SIGTERM, interrupt)
         startup_step("create_ROS_subscriptions")
         node = make_node(config, core, recorder)
-        startup_step("initialize_ultrasonic_GPIO")
-        worker = UltrasonicWorker(GPIO, config, recorder.emit)
+        if args.side_sensor_source == "gpio":
+            startup_step("initialize_ultrasonic_GPIO")
+            worker = UltrasonicWorker(GPIO, config, recorder.emit)
+        else:
+            startup_step("side_sensors_from_STM32_STATUS_no_GPIO")
+            worker = McuUltrasonicFeed(config, recorder.emit)
         startup_step("adapter_initialized_waiting_for_live_inputs")
         last_handshake = -math.inf
         last_snapshot = -math.inf
@@ -229,7 +240,7 @@ def main(arguments=None):
         last_command_s = time.monotonic()
         recorder.emit("handshake", session=core.session,
                       mcu_protocol=args.mcu_protocol,
-                      message=("Waiting for existing $STATUS. No firmware update or $FULL handshake."
+                      message=("Waiting for existing 7/11-field $STATUS. No firmware update or $FULL handshake."
                                if legacy else "Waiting for matching $CTRL v1 (optional extended firmware)."))
         # Imports and GPIO setup can legitimately take seconds before the
         # heartbeat begins. Only running-loop gaps count as scheduler faults.
@@ -254,11 +265,16 @@ def main(arguments=None):
             for decoded in lines:
                 if legacy and decoded.startswith("$STATUS"):
                     try:
-                        core.update_status(legacy.decode(decoded, time.monotonic(),
-                                                        allow_controls=core.state != "STARTUP"), time.monotonic())
+                        received_at = time.monotonic()
+                        core.update_status(legacy.decode(decoded, received_at,
+                                                        allow_controls=core.state != "STARTUP"), received_at)
+                        if args.side_sensor_source == "mcu" and not worker.update(legacy.raw, received_at):
+                            core.fault("STM32_STATUS_missing_MCU_side_sensor_fields")
                     except ValueError as exc:
                         core.status_stamp = None
                         recorder.emit("STATUS_invalid", error=str(exc), line=decoded)
+                        if isinstance(exc, LegacyStatusLayoutChanged):
+                            core.fault("STM32_STATUS_layout_changed_within_run")
                 elif not legacy and decoded.startswith("$CTRL"):
                     try:
                         core.update_status(ControlStatus.decode(decoded), time.monotonic())
@@ -267,6 +283,13 @@ def main(arguments=None):
                         recorder.emit("CTRL_invalid", error=str(exc), line=decoded)
                 elif not legacy and decoded.startswith("$STATUS") and core.status is None:
                     recorder.emit("legacy_firmware", instruction="Set MCU_PROTOCOL=legacy to use existing firmware without flashing")
+            mismatch = receiver.unsupported_layout()
+            if core.state == "STARTUP" and mismatch is not None:
+                recorder.emit("MCU_schema_mismatch", **mismatch,
+                              instruction="Provide the actual STM32 $STATUS printf/snprintf field definition. "
+                                          "RX exists; do not label this as disconnected wiring or fake missing fields.")
+                core.fault(f"STM32_STATUS_unsupported_layout:port={mismatch['port']}:"
+                           f"received_fields={mismatch['field_count']}:expected_fields=7_or_11")
             while True:
                 try:
                     core.update_side(worker.results.get_nowait())
@@ -308,6 +331,8 @@ def main(arguments=None):
             count = command_uart.write(payload)
             if count != len(payload):
                 raise IOError(f"Short UART write: {count}/{len(payload)}")
+            if legacy:
+                legacy.note_command_written(command[0], command[1], int(instant_stop_pending), time.monotonic())
             instant_stop_pending = False
             heartbeat_gap = now - last_command_s
             recorder.emit("uart_tx", kind="command", text=payload.decode("ascii"),
@@ -340,7 +365,7 @@ def main(arguments=None):
                     print(f"[BUNDLE FAIL] Cannot request diagnostics: {exc}", file=sys.stderr, flush=True)
             if args.preflight_only and core.preflight_ready:
                 recorder.emit("ready", mcu_protocol=args.mcu_protocol,
-                              message="Preflight passed: fresh camera/LiDAR/MCU status/GPIO, zero motion only")
+                              message=f"Preflight passed: fresh camera/LiDAR/MCU status/{args.side_sensor_source}_side_sensors, zero motion only")
                 result = 0
                 break
             if args.preflight_only and core.state == "FAULT_STOP":

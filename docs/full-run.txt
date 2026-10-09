@@ -21,8 +21,9 @@ An installed GPIO package that still cannot import now FAILS its setup stage;
 the installer no longer treats pip's "already satisfied" as a successful repair.
 A newly installed package also has to pass import before that stage can pass.
 System logs now record the selected model, device-tree model/compatible/ids,
-GPIO chip labels and installed GPIO package metadata. GPIO detection/import
-failure still prevents starting the controller; no failed sensor is bypassed.
+GPIO chip labels and installed GPIO package metadata. When SIDE_SENSOR_SOURCE=gpio,
+GPIO detection/import failure prevents starting the controller. The confirmed
+STM32-wired robot now uses mcu and does not depend on this GPIO package.
 Reference: https://github.com/NVIDIA/jetson-gpio/blob/v2.1.7/lib/python/Jetson/GPIO/gpio_pin_data.py
 
 2026-10-09 live preflight failure fix
@@ -70,6 +71,80 @@ evidence that the sensors are physically working. Before movement, place a
 known object in range of EACH sensor and confirm VALID distance readings.
 Do not reinterpret NO_ECHO as zero metres or as proof of obstacle clearance.
 
+2026-10-09 compact STATUS discovery (not a disconnected return link)
+
+Received archive 20261009T143147Z-eecHAv-debug.tar.gz records 19017 RX bytes
+on ttyTHS1 (ttyTHS2 stayed silent). Of 788 complete lines, 787 were clean
+7-field frames such as $STATUS,0,0,0,-1,-1,80; one had a startup NUL prefix.
+At the time of that run, the deployed layout differed from the decoder's expected
+11-field STATUS. Every clean frame was rejected, causing the old misleading
+missing/stale startup timeout. The first numeric value changed 30 -> 0 -> 5 -> 0.
+The field meanings were subsequently supplied by the user on 2026-10-10:
+
+  $STATUS, BASE_RPM, LEFT_RPM, RIGHT_RPM, LEFT_US_CM, RIGHT_US_CM, SHARP_CM
+
+The actual snprintf takes base_target_rpm, left_rpm, right_rpm, left_us_cm,
+right_us_cm, sharp_distance_cm, all as integers. The two -1 values in this run
+therefore belong to MCU ultrasound fields, NOT measured wheel RPM or stop flags.
+The user additionally confirmed on 2026-10-10 that the physical side sensors
+are connected to STM32, NOT Jetson GPIO.
+
+2026-10-10 confirmed 7-field support
+
+Both confirmed 7-field and original 11-field STATUS are now automatically
+validated/decoded without sending FULL or requiring a firmware update. A run
+locks its format after the first selected frame; switching formats during that
+run faults instead of mixing button/stop interpretations. Raw ADC/target/PWM/ESTOP
+fields missing from compact STATUS are None/unavailable, never synthetic zeros.
+The first base RPM is ignored locally, then new 5-RPM increases/decreases infer
+UP/DOWN as before. Actual left/right RPM fields drive the existing odometry.
+
+Compact STATUS has no wheel-target report or ESTOP flag. Terminal instant-stop
+therefore requires a complete HOST zero-RPM write followed by three distinct
+zero measured-RPM observations at least 50ms apart. Coasting RPM resets the
+confirmation count; batched duplicate frames cannot satisfy it. This is logged
+as legacy_stop_standstill_observed, NOT an MCU command ACK. UP in/before the
+confirming sample is consumed; a later UP resumes the saved speed/curve.
+Original 11-field mode retains its zero-target feedback barrier. The compact
+mode cannot independently observe physical ESTOP state or firmware fault cause.
+The default SIDE_SENSOR_SOURCE=mcu now consumes the reported left/right cm fields
+and converts them to metres for all existing side-clearance/baseline/pass/rear
+logic. No Jetson GPIO import, pin configuration, measurement thread or cleanup
+is used in this mode. -1 is ambiguous NO_ECHO with distance=None, never zero.
+Values 0/1cm are FAULT; values above the configured maximum are out-of-range
+NO_ECHO. Echo acquisition timestamps are absent: freshness is STATUS reception,
+not proof that the MCU sampled its physical sensors again. Log counters retain
+raw cm, mapped status/metres, per-side VALID/NO_ECHO/FAULT and the chosen source.
+Sensor validity and LiDAR/body clearance are not bypassed.
+
+SIDE_SENSOR_SOURCE=gpio / --side-sensor-source gpio remains available ONLY for
+older robots whose side sensors actually connect to Jetson. For that optional
+hardware use sudo env SIDE_SENSOR_SOURCE=gpio bash scripts/setup_full_run.sh.
+The 11-field legacy and optional ctrl protocols need gpio because neither carries
+the compact side-cm fields. Choosing mcu with a status lacking side fields faults
+explicitly; it does not guess clear space or silently switch sensor sources.
+
+Receiver diagnostics now record repeated unknown field counts and raw numeric
+values. Five consistent integer-shaped unsupported frames during startup with
+NO validated source cause STM32_STATUS_unsupported_layout and an automatic bundle
+instead of a 90-second missing-data timeout. Supported field counts are now 7
+and 11; this fail-safe diagnosis applies to OTHER unknown layouts. A valid source
+on either owned UART still takes precedence; isolated partial/noisy frames do not
+cause this diagnosis. Decoders never guess the semantics of unknown layouts.
+
+Other independent evidence in that archive: all 1425 GPIO ultrasound samples
+were NO_ECHO with zero edge callbacks; 460 LiDAR points lay inside the configured
+body and front-bumper clearance was -0.415m despite a 2.387m radial front distance.
+These did not cause the startup failure, but actual sensor operation/LiDAR mounting
+offset and body returns must be checked before movement. They are not masked or
+treated as clear space automatically.
+
+Offline replay of this exact archive with the updated compact decoder and STM32
+side feed validated all 787 clean frames, reached READY after 34.021s without a
+fault, and kept all 4125 requested commands at zero RPM. Old unwired GPIO readings
+were excluded from the replay. This verifies the input/initialization correction,
+not live movement, physical sensor health or successful obstacle avoidance.
+
 Deployment prerequisites
 
 The default is now Jetson-only: MCU_PROTOCOL=legacy uses the already-deployed
@@ -97,11 +172,11 @@ STATUS means zero motion and an automatic diagnostic bundle, not open-loop mode.
    pins must be identified on the actual board before changing a physical wire.
    Default command-RX discovery also covers an existing STATUS return wire
    on MCU_DEVICE, without changing that wiring or the configured device names.
-4. Side HC-SR04 sensors connect directly to the Jetson BOARD-numbered header:
-   left TRIG=33 ECHO=31; right TRIG=7 ECHO=15. Existing level shifting must bring
-   ECHO down to the Jetson's GPIO voltage. Confirm that these header pins are
-   configured for GPIO on the actual carrier board. The Python package cannot
-   correct carrier-board wiring or pinmux automatically.
+4. This robot's side HC-SR04 sensors connect to STM32. Keep that wiring and the
+   existing firmware; left_us_cm/right_us_cm arrive through compact STATUS.
+   Default SIDE_SENSOR_SOURCE=mcu needs no Jetson GPIO wiring/library. For a
+   DIFFERENT gpio-wired robot only: left BOARD TRIG=33 ECHO=31, right TRIG=7
+   ECHO=15, with appropriate voltage shifting and carrier pinmux configuration.
 5. Run: sudo bash scripts/setup_full_run.sh
    This prepares software only and does not flash or start movement.
    It attempts independent installation/check stages even after another stage
@@ -111,7 +186,7 @@ STATUS means zero motion and an automatic diagnostic bundle, not open-loop mode.
    This checks files/imports/device access/configuration only.
 7. Run: sudo bash scripts/start_full_run.sh --preflight-only
    This starts the actual devices and requires fresh YOLO, LiDAR, $STATUS and both
-   GPIO worker samples, while enforcing zero RPM even if UP is pressed. Success
+   side-sensor samples from the selected source, enforcing zero RPM even if UP is pressed. Success
    does not prove that NO_ECHO represents open space rather than a disconnected
    ultrasonic sensor: both cause no rising edge. Point a known object at each
    sensor and inspect VALID readings in the log to confirm physical operation.
@@ -142,8 +217,9 @@ Immediate user stop WITHOUT exiting the process:
   sudo bash scripts/start_full_run.sh --instant-stop
 The launcher stays alive, drops to zero without a ramp on the next control
 cycle, and keeps the avoidance plan. A new observable UP resumes saved speed.
-Wait for legacy_stop_acknowledged in controller.log (normally ~0.2s) before UP.
-The first STATUS acknowledging zero wheel targets establishes a new baseline;
+Wait for legacy_stop_acknowledged (11-field mode) or legacy_stop_standstill_observed
+(7-field mode) in controller.log before UP. Confirmation is not hard real-time.
+The STATUS establishing the zero-target/standstill barrier sets a new baseline;
 an UP in/before that acknowledgement is consumed so a queued press cannot undo
 the stop. A later UP resumes. The timing is not a hard real-time guarantee.
 The command sends an atomic request addressed to that launcher's PID/start time,
@@ -255,9 +331,11 @@ encoder counts when present. Rear clearance uses forward x displacement, not
 absolute distance travelled, so reverse motion cannot complete it.
 A new close face cancels tail clearance
 and returns to PASS. Three metres without ever seeing the object faults with
-a GPIO/orientation diagnosis; ten metres without a tail pauses. Timers do not
-run while paused. Inside sensor gets three samples for each outside sample,
-with 60ms between triggers; both remain monitored for staleness.
+a sensor-source/wiring/orientation diagnosis; ten metres without a tail pauses.
+Timers do not run while paused. In optional Jetson GPIO mode, the inside sensor
+gets three samples for each outside sample, with 60ms between triggers. Default
+STM32 mode consumes both reported values at each STATUS reception; the deployed
+firmware controls sensor sampling. Both remain monitored for reception staleness.
 
 Current measured/estimated geometry
 
@@ -373,8 +451,9 @@ timeout. No private full_run.env, full process environment, Git credentials/
 remotes or camera images are collected. Review journal output before publishing.
 
 runtime_health adds camera/LiDAR received/valid/invalid counts, ROS publisher QoS,
-GPIO trigger/edge/VALID/NO_ECHO/FAULT counts, worker liveness and maximum control
-heartbeat gap/work time. startup_step identifies the failing initialization
+STM32 side raw-cm/VALID/NO_ECHO/FAULT counts (or optional GPIO trigger/edge counts
+and worker liveness), plus maximum control heartbeat gap/work time.
+startup_step identifies the failing initialization
 operation. GPIO setup/callback/measurement/cleanup and UART exceptions include
 full tracebacks; UART errors include the last attempted command. Cleanup failures
 return failure rather than successful preflight and request diagnostics. Service

@@ -162,6 +162,7 @@ class FullRunLauncherTests(unittest.TestCase):
         args = next(v for v in events if v.startswith("ARGS "))
         self.assertIn("--preflight-only", args)
         self.assertIn("--status-port", args)
+        self.assertIn("--side-sensor-source mcu", args)
         self.assertNotIn("--no-command-status-fallback", args)
         self.assertNotIn("--open-loop", args)
         self.check_stopped(events)

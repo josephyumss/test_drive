@@ -58,6 +58,51 @@ class StatusReceiverTests(unittest.TestCase):
             self.assertEqual(health["ports"][port]["rx_bytes"], 0)
             self.assertIsNone(health["ports"][port]["valid_age_s"])
 
+    def test_received_robot_compact_format_is_selected_with_confirmed_field_mapping(self):
+        receiver = self.receiver()
+        self.command.incoming.extend(b"$STATUS,0,0,0,-1,-1,80\r\n" * 5)
+        lines, overflow = receiver.poll(10)
+        self.assertEqual(len(lines), 5)
+        self.assertFalse(overflow)
+        self.assertEqual(receiver.active_port, "commands")
+        self.assertIsNone(receiver.unsupported_layout())
+        self.assertEqual(receiver.stats["commands"]["valid_frames"], 5)
+
+    def test_truly_unknown_layout_is_still_diagnosed_not_decoded_as_zero_feedback(self):
+        receiver = self.receiver()
+        self.command.incoming.extend(b"$STATUS,0,0,0,-1,-1,80,0\r\n" * 5)
+        self.assertEqual(receiver.poll(10), ([], False))
+        mismatch = receiver.unsupported_layout()
+        self.assertEqual(mismatch["field_count"], 8)
+        self.assertEqual(mismatch["expected_field_counts"], [7, 11])
+        self.assertIsNone(receiver.active_port)
+        self.assertIn("deployed_schema", receiver.snapshot(10)["diagnosis"])
+
+    def test_one_short_frame_does_not_overrule_a_later_valid_stream(self):
+        receiver = self.receiver()
+        self.command.incoming.extend(b"$STATUS,0,0,0,-1,-1,80,0\n")
+        receiver.poll(10)
+        self.assertIsNone(receiver.unsupported_layout())
+        self.command.incoming.extend(status())
+        receiver.poll(11)
+        self.assertEqual(receiver.active_port, "commands")
+        self.assertIsNone(receiver.unsupported_layout())
+
+    def test_valid_other_port_wins_over_repeated_unknown_schema(self):
+        receiver = self.receiver()
+        self.command.incoming.extend(b"$STATUS,30,0,0,-1,-1,80,0\n" * 6)
+        self.telemetry.incoming.extend(status())
+        lines, _ = receiver.poll(10)
+        self.assertEqual(lines, [status().decode().strip()])
+        self.assertEqual(receiver.active_port, "status")
+        self.assertIsNone(receiver.unsupported_layout())
+
+    def test_corrupt_noninteger_short_frames_are_not_misidentified_as_a_schema(self):
+        receiver = self.receiver()
+        self.command.incoming.extend(b"$STATUS,0,bad,0,-1,-1,80\n" * 8)
+        receiver.poll(10)
+        self.assertIsNone(receiver.unsupported_layout())
+
     def test_configured_status_wins_when_both_sources_have_valid_frames(self):
         receiver = self.receiver()
         self.telemetry.incoming.extend(status(10))

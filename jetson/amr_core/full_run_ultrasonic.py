@@ -175,3 +175,53 @@ class UltrasonicWorker:
         self.initialized, self.callbacks = [], []
         if errors:
             raise RuntimeError("GPIO cleanup failures: " + ",".join(errors))
+
+
+class McuUltrasonicFeed:
+    """Side centimetres from confirmed compact STATUS; no Jetson GPIO owner."""
+    def __init__(self, config, emit):
+        self.c, self.emit = config, emit
+        self.results = queue.Queue(maxsize=64)
+        self.inside = None
+        self.stats = {side: {"VALID": 0, "NO_ECHO": 0, "FAULT": 0, "last_cm": None,
+                             "last_reading": None} for side in ("left", "right")}
+        emit("side_sensor_source", source="STM32_STATUS", unit="cm", Jetson_GPIO_owner=False)
+
+    def update(self, raw, now):
+        if raw.left_us_cm is None or raw.right_us_cm is None:
+            self.emit("mcu_side_input_invalid", field_count=raw.field_count,
+                      reason="No MCU side-centimetre fields in this STATUS layout",
+                      instruction="This robot needs compact 7-field STATUS. Select gpio only if sensors are physically on Jetson.")
+            return False
+        for side, cm in (("left", raw.left_us_cm), ("right", raw.right_us_cm)):
+            if cm == -1:
+                reading = SideReading(side, now, "NO_ECHO", detail="MCU_minus_one_no_valid_echo_ambiguous_timeout_or_sensor_fault")
+            elif cm < 2:
+                reading = SideReading(side, now, "FAULT", cm / 100.0,
+                                      detail="MCU_distance_below_2cm_or_invalid_zero")
+            elif cm / 100.0 > self.c.ultrasonic_max_m:
+                reading = SideReading(side, now, "NO_ECHO", cm / 100.0,
+                                      detail="MCU_echo_outside_configured_range")
+            else:
+                reading = SideReading(side, now, "VALID", cm / 100.0, detail="MCU_centimetres_converted_to_metres")
+            stats = self.stats[side]
+            stats[reading.status] += 1
+            stats["last_cm"] = cm
+            stats["last_reading"] = {"status": reading.status, "distance_m": reading.distance_m,
+                                     "stamp": reading.stamp, "detail": reading.detail}
+            self.emit("ultrasonic", source="STM32_STATUS", raw_cm=cm, reading=reading)
+            if self.results.full():
+                self.results.get_nowait()
+                self.emit("ultrasonic_queue_overflow", source="STM32_STATUS")
+            self.results.put_nowait(reading)
+        return True
+
+    def snapshot(self):
+        return {"source": "STM32_STATUS", "raw_unit": "cm", "control_unit": "m",
+                "Jetson_GPIO_owner": False, "queue_size": self.results.qsize(),
+                "sides": self.stats, "NO_ECHO_is_ambiguous": True,
+                "MCU_sensor_acquisition_timestamps": "not_reported; freshness_is_STATUS_receive_time",
+                "ever_valid_echo_observed": {s: bool(v["VALID"]) for s, v in self.stats.items()}}
+
+    def close(self):
+        pass  # No GPIO, worker thread or separate UART to close.
