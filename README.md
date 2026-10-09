@@ -1,3 +1,23 @@
+=====================================
+첫 실행 시 아래 커맨드, 터미널 창에다 복붙 실행
+
+git pull --ff-only origin main \
+  && sudo bash scripts/setup_full_run.sh \
+  && sudo bash scripts/start_full_run.sh --check \
+  && sudo bash scripts/start_full_run.sh --preflight-only \
+  && sudo bash scripts/install_full_run_service.sh \
+  && sudo systemctl start amr-full-run.service
+
+
+프로세스 수동 실행
+
+sudo systemctl stop amr-full-run.service \
+  && sudo bash scripts/start_full_run.sh
+
+프로세스 수동 정지는 터미널 창에서 Ctrl + C 
+=====================================
+
+
 SETUP 1
 
 cd /home/hyoripyu/Projects/test_drive
