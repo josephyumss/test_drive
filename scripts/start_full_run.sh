@@ -237,6 +237,33 @@ diagnostics_pid=''
 diagnostics_reported=0
 failure_reason='runtime_exit'
 
+release_runtime_resources() {
+    local resource owners remaining=0
+    local -a resources=("$LIDAR_DEVICE" "5005/udp" "8081/tcp")
+    for resource in "${resources[@]}"; do
+        owners="$(fuser "$resource" 2>/dev/null || true)"
+        [[ -n "$owners" ]] || continue
+        echo "[CLEANUP] Releasing stale owner(s) of $resource: $owners"
+        fuser -k -TERM "$resource" >> "$LOG_DIR/shutdown.log" 2>&1 || true
+    done
+    sleep 0.2
+    for resource in "${resources[@]}"; do
+        owners="$(fuser "$resource" 2>/dev/null || true)"
+        [[ -n "$owners" ]] || continue
+        echo "[CLEANUP] Forcing stale owner(s) off $resource: $owners"
+        fuser -k -KILL "$resource" >> "$LOG_DIR/shutdown.log" 2>&1 || true
+    done
+    sleep 0.1
+    for resource in "${resources[@]}"; do
+        owners="$(fuser "$resource" 2>/dev/null || true)"
+        if [[ -n "$owners" ]]; then
+            echo "[CLEANUP FAIL] $resource is still owned by:$owners"
+            remaining=1
+        fi
+    done
+    return "$remaining"
+}
+
 cleanup() {
     local result=$? forced=0 pid
     trap - EXIT INT TERM ERR
@@ -297,6 +324,10 @@ PY
         wait "$pid"
         echo "[CHILD EXIT] pid=$pid exit=$? phase=cleanup"
     done
+    if ! release_runtime_resources; then
+        result=1
+        failure_reason="${failure_reason}_runtime_resource_release_failed"
+    fi
     rm -f -- "$RUN_DIR/full_run.pid"
     echo "[STOP] exit=$result forced=$forced logs=$LOG_DIR"
     # Motors and owned sensor processes are stopped before any blocking
@@ -311,7 +342,7 @@ PY
     exit "$result"
 }
 trap cleanup EXIT
-trap 'exit 0' INT TERM
+trap 'exit 0' INT TERM HUP
 printf '%s %s\n' "$$" "$(awk '{print $22}' "/proc/$$/stat")" > "$RUN_DIR/full_run.pid"
 
 # Start the zero-RPM controller before sensor warmup. It owns the only actuator

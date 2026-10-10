@@ -54,7 +54,18 @@ if name=='docker':
     if args[:1]==['info']: print(json.dumps({'nvidia':{}}))
     if args[:1]==['stop']: event('DOCKER_STOP')
     sys.exit(0)
-if name=='fuser': sys.exit(0 if os.environ.get('BUSY') else 1)
+if name=='fuser':
+    resource=args[-1] if args else ''
+    existing=Path(os.environ['EVENTS']).read_text() if Path(os.environ['EVENTS']).exists() else ''
+    marker='FUSER_KILL '+resource
+    if args[:2] in (['-k','-TERM'], ['-k','-KILL']):
+        event(marker)
+        sys.exit(0)
+    if (os.environ.get('LINGER_RESOURCE') and resource.endswith('/lidar')
+            and 'TERM lidar' in existing and marker not in existing):
+        print('4242')
+        sys.exit(0)
+    sys.exit(0 if os.environ.get('BUSY') else 1)
 if name=='ros2':
     if args[:2]==['pkg','prefix']: sys.exit(0)
     sys.exit(run('lidar' if 'ldlidar_stl_ros2' in args else 'bridge'))
@@ -214,6 +225,13 @@ class FullRunLauncherTests(unittest.TestCase):
         self.assertEqual(result.returncode, 137, result.stdout)
         self.check_stopped(events)
         self.assertIn("AUTO_BUNDLE", events)
+
+    def test_cleanup_releases_lidar_owner_left_after_process_group_exit(self):
+        result, events = self.run_launcher(LINGER_RESOURCE="1")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertTrue(any(event.startswith("FUSER_KILL ") and event.endswith("/lidar")
+                            for event in events), events)
+        self.check_stopped(events)
 
     def test_fault_while_controller_remains_alive_is_bundled_once(self):
         import time
