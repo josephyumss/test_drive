@@ -15,7 +15,7 @@ from .reactive_avoidance import (
     BezierPathFollower, CubicBezierPath, DetectionTracker, FusionConfig,
     WheelOdometry, fuse_confirmed_tracks,
     line_heading_error_rad, local_point_to_world, passing_lateral_offset_m,
-    select_priority_target,
+    select_priority_target, wrap_angle,
 )
 
 
@@ -38,16 +38,18 @@ class FullRunConfig:
     camera_lidar_yaw_offset_deg: float = 0.0
     minimum_confidence: float = 0.45
     detection_frames: int = 3
-    trigger_distance_m: float = 2.0
+    minimum_trigger_distance_m: float = 2.0
+    trigger_distance_m: float = 3.0
     maximum_rpm: int = 75
     entry_rpm: int = 36
     bypass_rpm: int = 48
     return_rpm: int = 42
     acceleration_rpm_s: float = 10.0
-    deceleration_rpm_s: float = 10.0
+    deceleration_rpm_s: float = 75.0
     turn_acceleration_rpm_s: float = 15.0
     turn_deceleration_rpm_s: float = 25.0
     avoidance_handle_ratio: float = 0.30
+    avoidance_heading_limit_deg: float = 80.0
     lookahead_m: float = 0.25
     path_completion_m: float = 0.08
     sensor_timeout_s: float = 1.0
@@ -109,6 +111,10 @@ class FullRunConfig:
             raise ValueError("Invalid confidence/camera FOV")
         if not 0.1 <= self.avoidance_handle_ratio <= 0.5:
             raise ValueError("avoidance_handle_ratio must be within 0.1..0.5")
+        if not 10 <= self.avoidance_heading_limit_deg < 90:
+            raise ValueError("avoidance_heading_limit_deg must be within 10..90")
+        if self.minimum_trigger_distance_m > self.trigger_distance_m:
+            raise ValueError("minimum trigger distance exceeds maximum trigger distance")
         if len({self.left_trig, self.left_echo, self.right_trig, self.right_echo}) != 4:
             raise ValueError("GPIO pins must be distinct")
         if any(pin > 40 for pin in (self.left_trig, self.left_echo, self.right_trig, self.right_echo)):
@@ -430,6 +436,15 @@ class FullRunController:
                   and abs(d * math.sin(a)) <= self.c.robot_width_m / 2 + self.c.rear_safety_margin_m]
         return min(values, default=(self.front - self.c.robot_length_m / 2) if self.front is not None else -math.inf)
 
+    def current_speed_rpm(self):
+        measured = () if self.status is None else (abs(self.status.left_rpm), abs(self.status.right_rpm))
+        return min(float(self.c.maximum_rpm), max((*measured, *map(abs, self.ramped)), default=0.0))
+
+    def current_trigger_distance_m(self):
+        ratio = self.current_speed_rpm() / self.c.maximum_rpm
+        return (self.c.minimum_trigger_distance_m
+                + ratio * (self.c.trigger_distance_m - self.c.minimum_trigger_distance_m))
+
     def freeze_target(self, target):
         self.target = target
         self.target_world = local_point_to_world(origin_x_m=self.odom.x_m,
@@ -437,13 +452,16 @@ class FullRunController:
                                                 origin_yaw_rad=self.odom.yaw_rad,
                                                 forward_m=target.forward_distance_m,
                                                 lateral_m=target.distance_m * math.sin(target.bearing_rad))
-        self.emit("frozen_obstacle", target=asdict(target), world=self.target_world)
+        self.emit("frozen_obstacle", target=asdict(target), world=self.target_world,
+                  speed_rpm=self.current_speed_rpm(),
+                  trigger_distance_m=self.current_trigger_distance_m())
         self.set_phase("STOPPING")
 
     def new_target(self):
         candidates = []
+        trigger_distance = self.current_trigger_distance_m()
         for target in self.objects:
-            if not target.intersects_corridor or target.forward_distance_m > self.c.trigger_distance_m:
+            if not target.intersects_corridor or target.forward_distance_m > trigger_distance:
                 continue
             world = local_point_to_world(origin_x_m=self.odom.x_m, origin_y_m=self.odom.y_m,
                                          origin_yaw_rad=self.odom.yaw_rad,
@@ -474,6 +492,18 @@ class FullRunController:
                                            completion_heading_tolerance_rad=math.radians(3))
         self.emit("path", phase=self.phase, control_points=asdict(path))
 
+    def entry_path_is_safe(self, x, y):
+        path = CubicBezierPath.from_poses(start_x_m=self.odom.x_m, start_y_m=self.odom.y_m,
+                                         start_yaw_rad=self.odom.yaw_rad, goal_x_m=x,
+                                         goal_y_m=y, goal_yaw_rad=0.0,
+                                         handle_ratio=self.c.avoidance_handle_ratio)
+        limit = math.radians(self.c.avoidance_heading_limit_deg)
+        for index in range(121):
+            tangent_x, tangent_y = path.tangent(index / 120)
+            if tangent_x <= 0 or abs(math.atan2(tangent_y, tangent_x)) >= limit:
+                return False
+        return True
+
     def choose_entry(self):
         preferred = "right" if self.target.bearing_rad > 0 else "left"
         if abs(self.target.bearing_rad) < math.radians(3):
@@ -495,6 +525,11 @@ class FullRunController:
                                            corridor_half_width_m=self.fusion.corridor_half_width_m)
         x, y = local_point_to_world(origin_x_m=self.odom.x_m, origin_y_m=self.odom.y_m,
                                     origin_yaw_rad=self.odom.yaw_rad, forward_m=forward, lateral_m=lateral)
+        if not self.entry_path_is_safe(x, y):
+            self.emit("entry_path_rejected", forward_m=forward, lateral_m=lateral,
+                      heading_limit_deg=self.c.avoidance_heading_limit_deg)
+            self.pause("entry_path_too_tight")
+            return
         self.lane_y = y
         self.baseline = []
         self.baseline_value = None
@@ -554,7 +589,7 @@ class FullRunController:
 
     def update_phase(self):
         if self.phase == "DRIVE":
-            target = select_priority_target(self.objects, self.fusion)
+            target = self.new_target()
             if target:
                 self.freeze_target(target)
         elif self.phase in ("STOPPING", "WAIT_DIRECTION"):
@@ -684,6 +719,8 @@ class FullRunController:
                         self.set_phase("DRIVE")
                     else:
                         extra = "insufficient_entry_forward_room"
+                elif self.reason in ("entry_path_too_tight", "avoidance_heading_limit"):
+                    extra = self.reason
                 if self.phase != "DRIVE" and self.new_target() is not None:
                     extra = "new_obstacle_on_saved_path"
                 if blocker or extra or self.status.stop_flags or self.status.base_rpm == 0:
@@ -703,6 +740,10 @@ class FullRunController:
         self.update_phase()
         if self.state != "RUNNING":
             return self.ramp_command((0, 0), dt)
+        if (self.phase in ("ENTRY", "RETURN")
+                and abs(wrap_angle(self.odom.yaw_rad)) >= math.radians(self.c.avoidance_heading_limit_deg)):
+            self.pause("avoidance_heading_limit", immediate=True)
+            return 0, 0
         desired = self.desired_command()
         self.ramp_command(desired, dt)
         if max(self.command) >= 3:
@@ -734,6 +775,8 @@ class FullRunController:
                            "MCU_status": None if self.status_stamp is None else now - self.status_stamp},
                 "sides": {k: asdict(v) for k, v in self.sides.items()}, "front_m": self.front,
                 "front_bumper_clearance_m": self.front_clearance_m(),
+                "avoidance_trigger": {"current_speed_rpm": self.current_speed_rpm(),
+                                       "distance_m": self.current_trigger_distance_m()},
                 "health_errors": self.health_errors(now), "fault_reason": self.fault_reason,
                 "paused_fault_reason": self.paused_fault_reason,
                 "clearance_evidence": {"nearest_front_corridor_point_xy_m": nearest,

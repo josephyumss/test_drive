@@ -83,14 +83,19 @@ class FullRunTests(unittest.TestCase):
         self.assertEqual(self.config.bypass_rpm, 48)
         self.assertEqual(self.config.return_rpm, 42)
         self.assertEqual(self.config.acceleration_rpm_s, 10.0)
+        self.assertEqual(self.config.deceleration_rpm_s, 75.0)
         self.assertEqual(self.config.turn_acceleration_rpm_s, 15.0)
         self.assertEqual(self.config.turn_deceleration_rpm_s, 25.0)
         self.assertEqual(self.config.avoidance_handle_ratio, 0.30)
+        self.assertEqual(self.config.minimum_trigger_distance_m, 2.0)
+        self.assertEqual(self.config.trigger_distance_m, 3.0)
+        self.assertEqual(self.config.avoidance_heading_limit_deg, 80.0)
         self.assertEqual(self.config.minimum_entry_forward_m, 0.30)
 
     def test_config_rejects_overlapping_thresholds_and_duplicate_pins(self):
         for config in (replace(self.config, side_stop_m=0.45), replace(self.config, right_echo=31),
-                       replace(self.config, maximum_rpm=80), replace(self.config, wheel_base_m=0)):
+                       replace(self.config, maximum_rpm=80), replace(self.config, wheel_base_m=0),
+                       replace(self.config, minimum_trigger_distance_m=3.1)):
             with self.assertRaises(ValueError):
                 config.validate()
 
@@ -114,6 +119,26 @@ class FullRunTests(unittest.TestCase):
             self.assertGreaterEqual(command[0], previous)
             previous = command[0]
         self.assertEqual(command, (10, 10))
+
+    def test_full_stop_from_maximum_speed_takes_no_more_than_one_second(self):
+        self.core.ramped = [75.0, 75.0]
+        self.assertEqual(self.core.ramp_command((0, 0), 0.5), (38, 38))
+        self.assertEqual(self.core.ramp_command((0, 0), 0.5), (0, 0))
+
+    def test_detection_range_scales_from_two_to_three_metres_with_speed(self):
+        self.core.ramped = [0.0, 0.0]
+        self.assertAlmostEqual(self.core.current_trigger_distance_m(), 2.0)
+        self.core.ramped = [37.5, 37.5]
+        self.assertAlmostEqual(self.core.current_trigger_distance_m(), 2.5)
+        self.core.ramped = [75.0, 75.0]
+        self.assertAlmostEqual(self.core.current_trigger_distance_m(), 3.0)
+
+        distant = self.target(distance=2.7)
+        self.core.objects = [distant]
+        self.core.ramped = [0.0, 0.0]
+        self.assertIsNone(self.core.new_target())
+        self.core.ramped = [75.0, 75.0]
+        self.assertEqual(self.core.new_target(), distant)
 
     def test_phase_speed_limits_scale_with_75_rpm_drive_limit(self):
         self.start()
@@ -155,15 +180,34 @@ class FullRunTests(unittest.TestCase):
         self.assertAlmostEqual(self.core.follower.path.p1[0], expected_handle)
         self.assertAlmostEqual(self.core.follower.path.p2[0], 1.2 - expected_handle)
 
-    def test_slightly_reduced_forward_room_can_start_entry(self):
+    def test_tight_entry_path_pauses_instead_of_attempting_a_uturn(self):
         self.start()
         self.core.target = self.target()
         obstacle_x = (self.config.robot_length_m / 2
                       + self.config.side_safety_margin_m + 0.31)
         self.core.target_world = (obstacle_x, 0.0)
         self.core.choose_entry()
+        self.assertEqual(self.core.state, "PAUSED")
+        self.assertEqual(self.core.reason, "entry_path_too_tight")
+
+    def test_entry_starts_when_early_detection_leaves_a_safe_curve(self):
+        self.start()
+        self.core.target = self.target()
+        obstacle_x = (self.config.robot_length_m / 2
+                      + self.config.side_safety_margin_m + 1.30)
+        self.core.target_world = (obstacle_x, 0.0)
+        self.core.choose_entry()
         self.assertEqual(self.core.state, "RUNNING")
         self.assertEqual(self.core.phase, "ENTRY")
+
+    def test_entry_stops_before_heading_can_reach_uturn_angle(self):
+        self.start()
+        self.core.set_phase("ENTRY")
+        self.core.make_path(1.5, 0.8)
+        self.core.odom.yaw_rad = math.radians(81)
+        self.assertEqual(self.step(), (0, 0))
+        self.assertEqual(self.core.state, "PAUSED")
+        self.assertEqual(self.core.reason, "avoidance_heading_limit")
 
     def test_too_little_forward_room_still_pauses(self):
         self.start()
