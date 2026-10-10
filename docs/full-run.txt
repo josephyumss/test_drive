@@ -153,7 +153,10 @@ Both confirmed 7-field and original 11-field STATUS are now automatically
 validated/decoded without sending FULL or requiring a firmware update. A run
 locks its format after the first selected frame; switching formats during that
 run faults instead of mixing button/stop interpretations. Raw ADC/target/PWM/ESTOP
-fields missing from compact STATUS are None/unavailable, never synthetic zeros.
+fields remain validated. Fields missing from compact STATUS are None/unavailable,
+never synthetic zeros. The deployed compact firmware was later observed at
+BASE_RPM=80; this raw button baseline is accepted while outgoing wheel commands
+remain independently capped by config/full_run.json maximum_rpm.
 The first base RPM is ignored locally, then new 5-RPM increases/decreases infer
 UP/DOWN as before. Actual left/right RPM fields drive the existing odometry.
 

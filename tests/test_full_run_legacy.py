@@ -93,16 +93,16 @@ class LegacyAdapterTests(unittest.TestCase):
         self.assertEqual(self.feed(10).stop_flags, 0)
 
     def test_at_firmware_limit_UP_is_invisible_and_DOWN_UP_recovers(self):
-        self.feed(65)
+        self.feed(80)
         self.adapter.request_instant_stop()
-        self.assertEqual(self.feed(65).up_count, 0)
-        self.feed(60)
-        resumed = self.feed(65)
+        self.assertEqual(self.feed(80).up_count, 0)
+        self.feed(75)
+        resumed = self.feed(80)
         self.assertEqual((resumed.base_rpm, resumed.stop_flags, resumed.up_count), (5, 0, 1))
         self.assertTrue(any(name == "legacy_button_limit" for name, _ in self.events))
 
     def test_invalid_STATUS_is_rejected(self):
-        for line in ("$CTRL,1,123", status_line(70), status_line(3), status_line(-5),
+        for line in ("$CTRL,1,123", status_line(256), status_line(3), status_line(-5),
                      status_line(left=1001), status_line(emergency=2)):
             with self.subTest(line=line), self.assertRaises(ValueError):
                 self.adapter.decode(line, self.now)
@@ -135,10 +135,10 @@ class CompactLegacyAdapterTests(unittest.TestCase):
             self.assertIsNone(getattr(raw, name))
 
     def test_old_base_is_ignored_and_new_UP_DOWN_control_speed(self):
-        self.assertEqual(self.feed(30).base_rpm, 0)
-        self.assertEqual(self.feed(35).base_rpm, 5)
-        self.assertEqual(self.feed(40).base_rpm, 10)
-        self.assertEqual(self.feed(30).base_rpm, 0)
+        self.assertEqual(self.feed(80).base_rpm, 0)
+        self.assertEqual(self.feed(85).base_rpm, 5)
+        self.assertEqual(self.feed(90).base_rpm, 10)
+        self.assertEqual(self.feed(80).base_rpm, 0)
 
     def test_real_RPM_is_used_not_confused_with_ultrasonic_minus_one(self):
         result = self.feed(0, left=12, right=13)
@@ -199,7 +199,8 @@ class CompactLegacyAdapterTests(unittest.TestCase):
 
     def test_malformed_RPM_and_ranges_never_become_valid_zero(self):
         for line in ("$STATUS,0,NaN,0,-1,-1,80", "$STATUS,0,1001,0,-1,-1,80",
-                     "$STATUS,0,0,0,-2,-1,80", "$STATUS,3,0,0,-1,-1,80"):
+                     "$STATUS,0,0,0,-2,-1,80", "$STATUS,3,0,0,-1,-1,80",
+                     "$STATUS,256,0,0,-1,-1,80"):
             with self.subTest(line=line), self.assertRaises(ValueError):
                 validate_legacy_status(line)
 

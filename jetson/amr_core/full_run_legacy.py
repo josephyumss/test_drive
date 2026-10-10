@@ -1,6 +1,6 @@
 """Use the already-deployed $CMD/$STATUS firmware, without $FULL/$CTRL.
 
-Button events are INFERRED from changes in the firmware's 0..65 base RPM.
+Button events are INFERRED from changes in the firmware's byte-valued base RPM.
 Selected speed is local to this Jetson process and starts at zero. No button
 hold duration, MCU session/uptime, fault cause or cumulative encoder exists in
 legacy STATUS; never pretend that those quantities came from the MCU.
@@ -9,6 +9,12 @@ from dataclasses import asdict, dataclass
 
 from .ascii_serial_bridge import decode_ascii_status
 from .full_run import ControlStatus
+
+
+# The deployed compact firmware has been observed reporting 80. This value is
+# only a button-event counter/baseline on the Jetson: actual outgoing motor
+# commands remain capped independently by FullRunConfig.maximum_rpm.
+LEGACY_REPORTED_RPM_LIMIT = 255
 
 
 class UnsupportedLegacyStatus(ValueError):
@@ -50,14 +56,16 @@ def validate_legacy_status(line):
         # Confirmed by the user's actual STM32 snprintf (2026-10-10).
         # BASE, LEFT_RPM, RIGHT_RPM, LEFT_US_CM, RIGHT_US_CM, SHARP_CM.
         base, left, right, left_us, right_us, sharp = (int(v) for v in fields[1:])
-        if (not 0 <= base <= 65 or base % 5 or max(abs(left), abs(right)) > 1000
+        if (not 0 <= base <= LEGACY_REPORTED_RPM_LIMIT or base % 5
+                or max(abs(left), abs(right)) > 1000
                 or any(not -1 <= value <= 65535 for value in (left_us, right_us, sharp))):
             raise ValueError("Invalid compact STATUS RPM/range fields")
         return LegacyStatus(7, base, left, right, sharp, left_us_cm=left_us, right_us_cm=right_us)
     raw = decode_ascii_status(line)
-    if (not 0 <= raw.base_rpm <= 65 or raw.base_rpm % 5
+    if (not 0 <= raw.base_rpm <= LEGACY_REPORTED_RPM_LIMIT or raw.base_rpm % 5
             or not 0 <= raw.sharp_adc <= 65535
-            or any(not 0 <= value <= 65 for value in (raw.left_target_rpm, raw.right_target_rpm))
+            or any(not 0 <= value <= LEGACY_REPORTED_RPM_LIMIT
+                   for value in (raw.left_target_rpm, raw.right_target_rpm))
             or max(abs(raw.left_rpm), abs(raw.right_rpm)) > 1000
             or max(raw.left_pwm, raw.right_pwm) > 65535):
         raise ValueError("Invalid legacy STATUS ranges or non-5-RPM base step")
@@ -184,10 +192,10 @@ class LegacyControlAdapter:
                 # it; do not latch that old flag and deadlock the READY check.
                 self.emit("legacy_startup_ESTOP", action="wait for zero-command STATUS to clear it")
         self.previous_emergency = bool(raw.emergency)
-        if raw.base_rpm == 65 and (self.last_limit_warning is None or now - self.last_limit_warning >= 5):
+        if raw.base_rpm >= 80 and (self.last_limit_warning is None or now - self.last_limit_warning >= 5):
             self.last_limit_warning = now
-            self.emit("legacy_button_limit", raw_base_rpm=65,
-                      instruction="UP at firmware limit is invisible. Press DOWN once, then UP to restart.")
+            self.emit("legacy_button_limit", raw_base_rpm=raw.base_rpm,
+                      instruction="If UP produces no STATUS change, press DOWN once, then UP to restart.")
         self.emit("legacy_status_normalized", raw=asdict(raw), selected_rpm=self.selected_rpm,
                   base_delta=delta, inferred_up_count=self.up_count, inferred_down_count=self.down_count,
                   software_stop=self.software_stop, odometry="reported_RPM_integral",

@@ -204,12 +204,12 @@ class StatusReceiverTests(unittest.TestCase):
         receiver = self.receiver()
         self.telemetry.incoming.extend(status())
         receiver.poll(10)
-        self.telemetry.incoming.extend(status(66))
-        self.assertEqual(receiver.poll(11)[0], [status(66).decode().strip()])
+        self.telemetry.incoming.extend(status(256))
+        self.assertEqual(receiver.poll(11)[0], [status(256).decode().strip()])
         self.assertEqual(receiver.stats["status"]["invalid_frames"], 1)
 
     def test_invalid_status_ranges_never_select_a_source(self):
-        for frame in (status(66), status(4), b"$STATUS,0,99999,45,0,0,0,0,0,0,0\n",
+        for frame in (status(256), status(4), b"$STATUS,0,99999,45,0,0,0,0,0,0,0\n",
                       b"$STATUS,0,1234,45,0,0,1001,0,0,0,0\n",
                       b"$STATUS,0,1234,45,0,0,0,0,0,0,2\n",
                       b"$STATUS,bad\n"):
