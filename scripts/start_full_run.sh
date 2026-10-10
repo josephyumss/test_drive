@@ -149,37 +149,20 @@ echo "[INFO] command=$MCU_DEVICE status=$MCU_STATUS_DEVICE command_RX_fallback=$
 echo '[INFO] Default legacy uses existing $CMD/$STATUS, without a firmware update. Live status RX is required; no open-loop fallback.'
 [[ "$MODE" != --check ]] || { echo '[CHECK] Installation/configuration passed; live sensors and firmware not checked.'; exit 0; }
 
-# Never stop another run's processes, container or serial-port owner.
+# The lock prevents two full-run launchers from managing the same fixed-name
+# runtime at once. Serial owners are still never touched here, but a leftover
+# container with this launcher's dedicated name is safe to remove before a new
+# run.
 exec 9>"$RUN_DIR/full_run.lock"
 flock -n 9 || fail 'A full run is already active. Use --stop before starting manually.'
 for device in "$MCU_DEVICE" "$MCU_STATUS_DEVICE" "$LIDAR_DEVICE"; do
     fuser "$device" >/dev/null 2>&1 && fail "Another process owns $device; stop its launcher first."
 done
 if docker container inspect socialguide-amr-yolo >/dev/null 2>&1; then
-    stale_yolo_owner="$(docker container inspect socialguide-amr-yolo \
-        --format '{{index .Config.Labels "amr.full_run.owner"}}' 2>/dev/null || true)"
-    stale_yolo_project="$(docker container inspect socialguide-amr-yolo \
-        --format '{{index .Config.Labels "amr.full_run.project_dir"}}' 2>/dev/null || true)"
-    stale_yolo_pid="$(docker container inspect socialguide-amr-yolo \
-        --format '{{index .Config.Labels "amr.full_run.supervisor_pid"}}' 2>/dev/null || true)"
-    stale_yolo_ticks="$(docker container inspect socialguide-amr-yolo \
-        --format '{{index .Config.Labels "amr.full_run.supervisor_start_ticks"}}' 2>/dev/null || true)"
-    stale_yolo_active=0
-    if [[ "$stale_yolo_pid" =~ ^[0-9]+$ && "$stale_yolo_ticks" =~ ^[0-9]+$ \
-            && -r "/proc/$stale_yolo_pid/stat" ]]; then
-        current_yolo_ticks="$(awk '{print $22}' "/proc/$stale_yolo_pid/stat" 2>/dev/null || true)"
-        [[ "$current_yolo_ticks" != "$stale_yolo_ticks" ]] || stale_yolo_active=1
-    fi
-    if [[ -n "$stale_yolo_owner" && "$stale_yolo_project" == "$PROJECT_DIR" \
-            && "$stale_yolo_pid" =~ ^[0-9]+$ && "$stale_yolo_ticks" =~ ^[0-9]+$ \
-            && "$stale_yolo_active" == 0 ]]; then
-        echo "[CLEANUP] Removing stale full-run YOLO container owned by $stale_yolo_owner"
-        docker rm -f socialguide-amr-yolo >> "$LOG_DIR/shutdown.log" 2>&1 || true
-        docker container inspect socialguide-amr-yolo >/dev/null 2>&1 \
-            && fail 'Stale full-run YOLO container could not be removed.'
-    else
-        fail 'socialguide-amr-yolo is active or lacks verifiable ownership; stop its original launcher first.'
-    fi
+    echo '[CLEANUP] Removing leftover socialguide-amr-yolo container before start'
+    docker rm -f socialguide-amr-yolo >> "$LOG_DIR/shutdown.log" 2>&1 || true
+    docker container inspect socialguide-amr-yolo >/dev/null 2>&1 \
+        && fail 'Leftover socialguide-amr-yolo container could not be removed.'
 fi
 "$PYTHON_BIN" - <<'PY'
 import socket
@@ -331,21 +314,14 @@ PY
     fi
     for pid in "${sensor_pids[@]}"; do kill -TERM -- "-$pid" 2>/dev/null; done
     if (( yolo_owned )); then
-        owner="$(docker container inspect socialguide-amr-yolo --format '{{index .Config.Labels "amr.full_run.owner"}}' 2>/dev/null)"
-        owner_project="$(docker container inspect socialguide-amr-yolo --format '{{index .Config.Labels "amr.full_run.project_dir"}}' 2>/dev/null)"
-        owner_pid="$(docker container inspect socialguide-amr-yolo --format '{{index .Config.Labels "amr.full_run.supervisor_pid"}}' 2>/dev/null)"
-        owner_ticks="$(docker container inspect socialguide-amr-yolo --format '{{index .Config.Labels "amr.full_run.supervisor_start_ticks"}}' 2>/dev/null)"
-        if [[ "$owner" == "$YOLO_RUNTIME_OWNER" && "$owner_project" == "$PROJECT_DIR" \
-                && "$owner_pid" == "$$" && "$owner_ticks" == "$launcher_start_ticks" ]]; then
-            docker stop -t 2 socialguide-amr-yolo >> "$LOG_DIR/shutdown.log" 2>&1
-            docker rm -f socialguide-amr-yolo >> "$LOG_DIR/shutdown.log" 2>&1 || true
-            if docker container inspect socialguide-amr-yolo >/dev/null 2>&1; then
-                echo '[CLEANUP FAIL] Owned YOLO container still exists after stop/remove.'
-                result=1
-                failure_reason="${failure_reason}_yolo_container_release_failed"
-            fi
-        else
-            echo "[INFO] YOLO container absent or belongs to another run; not stopping it."
+        # yolo_owned is set only after this locked launcher starts the wrapper.
+        # Removing by the dedicated name also handles a killed docker client,
+        # missing labels, and --rm containers that survived terminal Ctrl+C.
+        docker rm -f socialguide-amr-yolo >> "$LOG_DIR/shutdown.log" 2>&1 || true
+        if docker container inspect socialguide-amr-yolo >/dev/null 2>&1; then
+            echo '[CLEANUP FAIL] YOLO container still exists after forced removal.'
+            result=1
+            failure_reason="${failure_reason}_yolo_container_release_failed"
         fi
     fi
     for pid in "${sensor_pids[@]}"; do

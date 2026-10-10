@@ -177,7 +177,7 @@ class FullRunLauncherTests(unittest.TestCase):
             if "START "+name in events and "FAIL "+name not in events:
                 self.assertIn("TERM "+name, events)
         self.assertIn("BRAKE", events)
-        self.assertIn("DOCKER_STOP", events)
+        self.assertIn("DOCKER_REMOVE", events)
         self.assertFalse((self.root / ".run/full_run.pid").exists())
 
     def test_normal_cleanup_and_logs(self):
@@ -218,12 +218,18 @@ class FullRunLauncherTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertEqual(events, [])
 
-    def test_busy_port_and_existing_container_are_not_stopped(self):
-        for overrides in ({"BUSY":"1"}, {"CONTAINER":"1"}):
-            result, events = self.run_launcher(**overrides)
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertTrue(all(event == "AUTO_BUNDLE" for event in events), events)
-            self.assertTrue(list((self.root / "logs/full_run").glob("*-debug.tar.gz")))
+    def test_busy_port_is_not_stopped(self):
+        result, events = self.run_launcher(BUSY="1")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertTrue(all(event == "AUTO_BUNDLE" for event in events), events)
+        self.assertTrue(list((self.root / "logs/full_run").glob("*-debug.tar.gz")))
+
+    def test_unlabeled_leftover_container_is_removed_before_start(self):
+        result, events = self.run_launcher(CONTAINER="1")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("DOCKER_REMOVE", events)
+        self.assertIn("START controller", events)
+        self.check_stopped(events)
 
     def test_stale_labeled_full_run_container_is_removed_before_start(self):
         result, events = self.run_launcher(
