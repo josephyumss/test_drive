@@ -24,7 +24,8 @@ sudo tail -F ~/Projects/test_drive/logs/full_run/latest/controller.log
 
 자동 프로세스 끊기 : sudo systemctl stop amr-core.service
 
-
+sudo chown -R "$(id -un):$(id -gn)" .git
+sudo chmod -R u+rwX .git
 
 
 cd ~/Projects/test_drive && sudo systemctl stop amr-full-run.service; sudo bash scripts/start_full_run.sh --stop; sudo fuser -k -TERM /dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0 2>/dev/null || true
