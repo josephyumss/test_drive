@@ -58,6 +58,7 @@ class FullRunConfig:
     side_stop_m: float = 0.30
     side_resume_m: float = 0.36
     entry_side_clear_m: float = 0.80
+    minimum_entry_forward_m: float = 0.30
     side_object_max_m: float = 0.70
     side_clear_min_m: float = 0.85
     baseline_tolerance_m: float = 0.10
@@ -486,7 +487,7 @@ class FullRunController:
         obstacle_local_x = ((self.target_world[0] - self.odom.x_m) * math.cos(self.odom.yaw_rad)
                             + (self.target_world[1] - self.odom.y_m) * math.sin(self.odom.yaw_rad))
         forward = obstacle_local_x - self.c.robot_length_m / 2 - self.c.side_safety_margin_m
-        if forward < 0.65:
+        if forward < self.c.minimum_entry_forward_m:
             self.pause("insufficient_entry_forward_room")
             return
         self.turn_left = options[0] == "left"

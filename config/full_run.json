@@ -36,6 +36,7 @@
   "side_stop_m": 0.30,
   "side_resume_m": 0.36,
   "entry_side_clear_m": 0.80,
+  "minimum_entry_forward_m": 0.30,
   "side_object_max_m": 0.70,
   "side_clear_min_m": 0.85,
   "baseline_tolerance_m": 0.10,

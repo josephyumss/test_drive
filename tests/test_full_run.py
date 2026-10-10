@@ -81,6 +81,7 @@ class FullRunTests(unittest.TestCase):
         self.assertEqual(self.config.turn_acceleration_rpm_s, 15.0)
         self.assertEqual(self.config.turn_deceleration_rpm_s, 25.0)
         self.assertEqual(self.config.avoidance_handle_ratio, 0.30)
+        self.assertEqual(self.config.minimum_entry_forward_m, 0.30)
 
     def test_config_rejects_overlapping_thresholds_and_duplicate_pins(self):
         for config in (replace(self.config, side_stop_m=0.45), replace(self.config, right_echo=31),
@@ -130,6 +131,26 @@ class FullRunTests(unittest.TestCase):
         expected_handle = chord * self.config.avoidance_handle_ratio
         self.assertAlmostEqual(self.core.follower.path.p1[0], expected_handle)
         self.assertAlmostEqual(self.core.follower.path.p2[0], 1.2 - expected_handle)
+
+    def test_slightly_reduced_forward_room_can_start_entry(self):
+        self.start()
+        self.core.target = self.target()
+        obstacle_x = (self.config.robot_length_m / 2
+                      + self.config.side_safety_margin_m + 0.31)
+        self.core.target_world = (obstacle_x, 0.0)
+        self.core.choose_entry()
+        self.assertEqual(self.core.state, "RUNNING")
+        self.assertEqual(self.core.phase, "ENTRY")
+
+    def test_too_little_forward_room_still_pauses(self):
+        self.start()
+        self.core.target = self.target()
+        obstacle_x = (self.config.robot_length_m / 2
+                      + self.config.side_safety_margin_m + 0.29)
+        self.core.target_world = (obstacle_x, 0.0)
+        self.core.choose_entry()
+        self.assertEqual(self.core.state, "PAUSED")
+        self.assertEqual(self.core.reason, "insufficient_entry_forward_room")
 
     def test_environmental_pause_decelerates_and_resume_accelerates(self):
         self.start()
