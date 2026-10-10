@@ -26,7 +26,7 @@ class FullRunConfig:
     encoder_counts_per_output_rev: int = 40000
     robot_width_m: float = 0.90
     robot_length_m: float = 0.85
-    side_safety_margin_m: float = 0.25
+    side_safety_margin_m: float = 0.20
     rear_safety_margin_m: float = 0.15
     side_sensor_x_m: float = 0.0
     side_sensor_y_m: float = 0.25
@@ -39,11 +39,11 @@ class FullRunConfig:
     minimum_confidence: float = 0.45
     detection_frames: int = 3
     trigger_distance_m: float = 2.0
-    maximum_rpm: int = 25
-    entry_rpm: int = 12
-    bypass_rpm: int = 16
-    return_rpm: int = 14
-    acceleration_rpm_s: float = 5.0
+    maximum_rpm: int = 75
+    entry_rpm: int = 36
+    bypass_rpm: int = 48
+    return_rpm: int = 42
+    acceleration_rpm_s: float = 10.0
     deceleration_rpm_s: float = 10.0
     turn_acceleration_rpm_s: float = 15.0
     turn_deceleration_rpm_s: float = 25.0
@@ -103,8 +103,8 @@ class FullRunConfig:
                     "left_echo", "right_trig", "right_echo", "log_max_bytes", "log_backup_count"):
             if type(getattr(self, key)) is not int:
                 raise ValueError(f"{key}: integer required")
-        if not 1 <= self.maximum_rpm <= 25:
-            raise ValueError("maximum_rpm must be 1..25 (Jetson full-run speed limit)")
+        if not 1 <= self.maximum_rpm <= 75:
+            raise ValueError("maximum_rpm must be 1..75 (Jetson full-run speed limit)")
         if not 0 < self.minimum_confidence <= 1 or not 1 < self.camera_horizontal_fov_deg < 179:
             raise ValueError("Invalid confidence/camera FOV")
         if not 0.1 <= self.avoidance_handle_ratio <= 0.5:

@@ -75,9 +75,14 @@ class FullRunTests(unittest.TestCase):
             self.step()
 
     def test_configuration_geometry(self):
-        self.assertAlmostEqual(self.config.expected_side_range_m, 0.45)
+        self.assertAlmostEqual(self.config.expected_side_range_m, 0.40)
         self.assertAlmostEqual(self.config.rear_clearance_m, 0.575)
-        self.assertEqual(self.config.maximum_rpm, 25)
+        self.assertEqual(self.config.side_safety_margin_m, 0.20)
+        self.assertEqual(self.config.maximum_rpm, 75)
+        self.assertEqual(self.config.entry_rpm, 36)
+        self.assertEqual(self.config.bypass_rpm, 48)
+        self.assertEqual(self.config.return_rpm, 42)
+        self.assertEqual(self.config.acceleration_rpm_s, 10.0)
         self.assertEqual(self.config.turn_acceleration_rpm_s, 15.0)
         self.assertEqual(self.config.turn_deceleration_rpm_s, 25.0)
         self.assertEqual(self.config.avoidance_handle_ratio, 0.30)
@@ -85,7 +90,7 @@ class FullRunTests(unittest.TestCase):
 
     def test_config_rejects_overlapping_thresholds_and_duplicate_pins(self):
         for config in (replace(self.config, side_stop_m=0.45), replace(self.config, right_echo=31),
-                       replace(self.config, maximum_rpm=30), replace(self.config, wheel_base_m=0)):
+                       replace(self.config, maximum_rpm=80), replace(self.config, wheel_base_m=0)):
             with self.assertRaises(ValueError):
                 config.validate()
 
@@ -109,6 +114,24 @@ class FullRunTests(unittest.TestCase):
             self.assertGreaterEqual(command[0], previous)
             previous = command[0]
         self.assertEqual(command, (10, 10))
+
+    def test_phase_speed_limits_scale_with_75_rpm_drive_limit(self):
+        self.start()
+        self.status = replace(self.status, base_rpm=75)
+        self.feed()
+        self.assertEqual(self.core.desired_command(), (75, 75))
+
+        self.core.set_phase("ENTRY")
+        self.core.make_path(2.0, 0.0)
+        self.assertEqual(self.core.desired_command(), (36, 36))
+
+        self.core.lane_y = 0.0
+        self.core.set_phase("PASS")
+        self.assertEqual(self.core.desired_command(), (48, 48))
+
+        self.core.set_phase("RETURN")
+        self.core.make_path(2.0, 0.0)
+        self.assertEqual(self.core.desired_command(), (42, 42))
 
     def test_entry_and_return_use_faster_but_still_limited_steering_slew(self):
         self.start()
