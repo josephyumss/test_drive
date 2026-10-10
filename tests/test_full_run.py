@@ -239,13 +239,13 @@ class FullRunTests(unittest.TestCase):
         self.assertEqual(self.core.state, "RUNNING")
         self.assertLess(resumed[0], 10)
 
-    def test_faults_are_suppressed_while_paused_and_recovery_can_resume(self):
+    def test_unneeded_side_fault_does_not_block_front_pause_recovery(self):
         self.start()
         self.step(front=0.20)
         self.assertEqual(self.core.state, "PAUSED")
         self.core.update_side(SideReading("right", self.now, "FAULT", detail="lifted"))
         self.assertEqual(self.core.state, "PAUSED")
-        self.assertEqual(self.core.paused_fault_reason, "ultrasonic_right:lifted")
+        self.assertIsNone(self.core.paused_fault_reason)
         self.status = replace(self.status, up_count=self.status.up_count + 1, base_rpm=10)
         self.now += 0.02
         self.status = replace(self.status, uptime_ms=int(self.now * 1000))
@@ -255,13 +255,8 @@ class FullRunTests(unittest.TestCase):
         self.core.update_side(SideReading("left", self.now, "NO_ECHO"))
         self.core.update_side(SideReading("right", self.now, "FAULT", detail="lifted"))
         self.core.tick(self.now)
-        self.assertEqual(self.core.state, "PAUSED")
-        self.assertFalse(self.core.pending_up)
-        self.feed(front=4.0)
-        self.step()
-        self.assertEqual(self.core.state, "PAUSED")
-        self.up(10)
         self.assertEqual(self.core.state, "RUNNING")
+        self.assertFalse(self.core.pending_up)
         self.assertIsNone(self.core.paused_fault_reason)
 
     def test_user_pause_preserves_follower_and_phase(self):
@@ -419,10 +414,38 @@ class FullRunTests(unittest.TestCase):
         self.assertEqual(self.core.state, "FAULT_STOP")
         self.assertIn("wheel_feedback", self.core.fault_reason)
 
-    def test_side_echo_fault_is_not_clear(self):
+    def test_side_fault_is_ignored_during_lidar_guided_entry_and_return(self):
         self.start()
+        for phase in ("ENTRY", "RETURN"):
+            self.core.set_phase(phase)
+            self.core.make_path(2.0, 0.5 if phase == "ENTRY" else 0.0)
+            self.core.update_side(SideReading("right", self.now, "FAULT", detail="angled_echo"))
+            self.assertEqual(self.core.state, "RUNNING")
+            self.step(right=0.20)
+            self.assertEqual(self.core.state, "RUNNING")
+
+    def test_inside_side_fault_stops_obstacle_passing(self):
+        self.passing()
         self.core.update_side(SideReading("right", self.now, "FAULT", detail="stuck_high"))
         self.assertEqual(self.core.state, "FAULT_STOP")
+
+    def test_outside_side_fault_is_ignored_while_passing(self):
+        self.passing()
+        self.core.update_side(SideReading("left", self.now, "FAULT", detail="outside_noise"))
+        self.assertEqual(self.core.state, "RUNNING")
+
+    def test_entry_direction_ignores_ultrasonic_and_uses_lidar_diagonal(self):
+        self.start()
+        self.core.target = self.target()
+        self.core.target_world = (2.0, 0.0)
+        self.core.update_side(SideReading("left", self.now, "VALID", 0.20))
+        self.core.update_side(SideReading("right", self.now, "VALID", 0.20))
+        self.assertTrue(self.core.entry_clear("left"))
+        self.assertTrue(self.core.entry_clear("right"))
+
+        self.core.points = [(math.radians(45), 0.50)]
+        self.assertFalse(self.core.entry_clear("left"))
+        self.assertTrue(self.core.entry_clear("right"))
 
     def test_constant_no_echo_cannot_confirm_tail(self):
         self.passing()

@@ -369,12 +369,20 @@ class FullRunController:
             self.fault(f"ultrasonic_{reading.side}:invalid_numeric_range")
             return
         self.sides[reading.side] = reading
-        if reading.status == "FAULT" and self.state != "STARTUP":
+        # Ultrasonic geometry is meaningful only after ENTRY has aligned the
+        # robot beside the frozen obstacle.  During DRIVE/ENTRY/RETURN an
+        # angled echo must not interrupt the LiDAR-guided path.
+        if (reading.status == "FAULT" and self.state != "STARTUP"
+                and self.side_sensor_required(reading.side)):
             self.fault(f"ultrasonic_{reading.side}:{reading.detail}")
 
     @property
     def inside(self):
         return "right" if self.turn_left else "left"
+
+    def side_sensor_required(self, side):
+        return (self.phase in ("BASELINE", "PASS", "REAR_CLEARANCE")
+                and side == self.inside)
 
     def fresh(self, stamp, now, timeout=None):
         return stamp is not None and 0 <= now - stamp <= (timeout or self.c.sensor_timeout_s)
@@ -388,6 +396,8 @@ class FullRunController:
             if not self.fresh(stamp, now, timeout):
                 errors.append(f"{name}_missing_or_stale")
         for side in ("left", "right"):
+            if not self.side_sensor_required(side):
+                continue
             r = self.sides.get(side)
             if r is None or not self.fresh(r.stamp, now) or r.status == "FAULT":
                 errors.append(f"ultrasonic_{side}_missing_stale_or_fault")
@@ -414,16 +424,19 @@ class FullRunController:
     def entry_clear(self, side):
         sign = 1 if side == "left" else -1
         diagonal = [d for a, d in self.points if math.radians(20) <= sign * a <= math.radians(75)]
-        return self.side_safe(side, self.c.side_resume_m) and min(diagonal, default=math.inf) >= self.c.entry_side_clear_m
+        # ENTRY is selected from the LiDAR's forward/diagonal free space.
+        # Side ultrasonics are intentionally ignored until the chassis is
+        # parallel to the obstacle and can use them to identify its tail.
+        return min(diagonal, default=math.inf) >= self.c.entry_side_clear_m
 
     def blocking_reason(self, resume=False):
         front_threshold = self.c.front_resume_m if resume else self.c.front_stop_m
         if self.front is None or self.front_clearance_m() <= front_threshold:
             return "front_clearance"
-        threshold = self.c.side_resume_m if resume else self.c.side_stop_m
-        for side in ("left", "right"):
-            if not self.side_safe(side, threshold):
-                return f"{side}_clearance"
+        if self.phase in ("BASELINE", "PASS", "REAR_CLEARANCE"):
+            threshold = self.c.side_resume_m if resume else self.c.side_stop_m
+            if not self.side_safe(self.inside, threshold):
+                return f"{self.inside}_clearance"
         if self.phase == "WAIT_DIRECTION" and self.target and not any(self.entry_clear(s) for s in ("left", "right")):
             return "no_entry_direction"
         return None
