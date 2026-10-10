@@ -1,5 +1,9 @@
 =====================================
-sudo fuser -k -TERM 5005/udp 8081/tcp 2>/dev/null || true; sudo bash scripts/start_full_run.sh
+git pull --ff-only origin main
+sudo fuser -k -TERM /dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0 5005/udp 8081/tcp 2>/dev/null || true
+sudo bash scripts/start_full_run.sh
+
+
 
 수동 실행 전용 (systemd 자동 실행 사용 안 함)
 
