@@ -17,6 +17,13 @@ sudo systemctl stop amr-full-run.service \
 프로세스 수동 정지는 터미널 창에서 Ctrl + C 
 
 
+실시간 로그 확인 -> 다른 터미널 창에서 
+
+sudo tail -F ~/Projects/test_drive/logs/full_run/latest/controller.log
+
+
+
+
 cd ~/Projects/test_drive && sudo systemctl stop amr-full-run.service; sudo bash scripts/start_full_run.sh --stop; sudo fuser -k -TERM /dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0 2>/dev/null || true
 
 =====================================
