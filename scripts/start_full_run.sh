@@ -156,7 +156,30 @@ for device in "$MCU_DEVICE" "$MCU_STATUS_DEVICE" "$LIDAR_DEVICE"; do
     fuser "$device" >/dev/null 2>&1 && fail "Another process owns $device; stop its launcher first."
 done
 if docker container inspect socialguide-amr-yolo >/dev/null 2>&1; then
-    fail 'socialguide-amr-yolo already exists; stop its original launcher first.'
+    stale_yolo_owner="$(docker container inspect socialguide-amr-yolo \
+        --format '{{index .Config.Labels "amr.full_run.owner"}}' 2>/dev/null || true)"
+    stale_yolo_project="$(docker container inspect socialguide-amr-yolo \
+        --format '{{index .Config.Labels "amr.full_run.project_dir"}}' 2>/dev/null || true)"
+    stale_yolo_pid="$(docker container inspect socialguide-amr-yolo \
+        --format '{{index .Config.Labels "amr.full_run.supervisor_pid"}}' 2>/dev/null || true)"
+    stale_yolo_ticks="$(docker container inspect socialguide-amr-yolo \
+        --format '{{index .Config.Labels "amr.full_run.supervisor_start_ticks"}}' 2>/dev/null || true)"
+    stale_yolo_active=0
+    if [[ "$stale_yolo_pid" =~ ^[0-9]+$ && "$stale_yolo_ticks" =~ ^[0-9]+$ \
+            && -r "/proc/$stale_yolo_pid/stat" ]]; then
+        current_yolo_ticks="$(awk '{print $22}' "/proc/$stale_yolo_pid/stat" 2>/dev/null || true)"
+        [[ "$current_yolo_ticks" != "$stale_yolo_ticks" ]] || stale_yolo_active=1
+    fi
+    if [[ -n "$stale_yolo_owner" && "$stale_yolo_project" == "$PROJECT_DIR" \
+            && "$stale_yolo_pid" =~ ^[0-9]+$ && "$stale_yolo_ticks" =~ ^[0-9]+$ \
+            && "$stale_yolo_active" == 0 ]]; then
+        echo "[CLEANUP] Removing stale full-run YOLO container owned by $stale_yolo_owner"
+        docker rm -f socialguide-amr-yolo >> "$LOG_DIR/shutdown.log" 2>&1 || true
+        docker container inspect socialguide-amr-yolo >/dev/null 2>&1 \
+            && fail 'Stale full-run YOLO container could not be removed.'
+    else
+        fail 'socialguide-amr-yolo is active or lacks verifiable ownership; stop its original launcher first.'
+    fi
 fi
 "$PYTHON_BIN" - <<'PY'
 import socket
@@ -309,8 +332,18 @@ PY
     for pid in "${sensor_pids[@]}"; do kill -TERM -- "-$pid" 2>/dev/null; done
     if (( yolo_owned )); then
         owner="$(docker container inspect socialguide-amr-yolo --format '{{index .Config.Labels "amr.full_run.owner"}}' 2>/dev/null)"
-        if [[ "$owner" == "$YOLO_RUNTIME_OWNER" ]]; then
+        owner_project="$(docker container inspect socialguide-amr-yolo --format '{{index .Config.Labels "amr.full_run.project_dir"}}' 2>/dev/null)"
+        owner_pid="$(docker container inspect socialguide-amr-yolo --format '{{index .Config.Labels "amr.full_run.supervisor_pid"}}' 2>/dev/null)"
+        owner_ticks="$(docker container inspect socialguide-amr-yolo --format '{{index .Config.Labels "amr.full_run.supervisor_start_ticks"}}' 2>/dev/null)"
+        if [[ "$owner" == "$YOLO_RUNTIME_OWNER" && "$owner_project" == "$PROJECT_DIR" \
+                && "$owner_pid" == "$$" && "$owner_ticks" == "$launcher_start_ticks" ]]; then
             docker stop -t 2 socialguide-amr-yolo >> "$LOG_DIR/shutdown.log" 2>&1
+            docker rm -f socialguide-amr-yolo >> "$LOG_DIR/shutdown.log" 2>&1 || true
+            if docker container inspect socialguide-amr-yolo >/dev/null 2>&1; then
+                echo '[CLEANUP FAIL] Owned YOLO container still exists after stop/remove.'
+                result=1
+                failure_reason="${failure_reason}_yolo_container_release_failed"
+            fi
         else
             echo "[INFO] YOLO container absent or belongs to another run; not stopping it."
         fi
@@ -343,14 +376,17 @@ PY
 }
 trap cleanup EXIT
 trap 'exit 0' INT TERM HUP
-printf '%s %s\n' "$$" "$(awk '{print $22}' "/proc/$$/stat")" > "$RUN_DIR/full_run.pid"
+launcher_start_ticks="$(awk '{print $22}' "/proc/$$/stat")"
+export FULL_RUN_SUPERVISOR_PID="$$" FULL_RUN_SUPERVISOR_START_TICKS="$launcher_start_ticks"
+export FULL_RUN_PROJECT_DIR="$PROJECT_DIR"
+printf '%s %s\n' "$$" "$launcher_start_ticks" > "$RUN_DIR/full_run.pid"
 
 # Start the zero-RPM controller before sensor warmup. It owns the only actuator
 # UART and keeps the STM32 heartbeat alive during YOLO initialization.
 args=(--config "$FULL_RUN_CONFIG" --port "$MCU_DEVICE" --status-port "$MCU_STATUS_DEVICE" \
       --baudrate "$MCU_BAUDRATE" --mcu-protocol "$MCU_PROTOCOL" --side-sensor-source "$SIDE_SENSOR_SOURCE" --log-dir "$LOG_DIR" --supervisor-pid "$$" \
       --user-stop-file "$RUN_DIR/full_run.user_stop.json" \
-      --supervisor-start-ticks "$(awk '{print $22}' "/proc/$$/stat")")
+      --supervisor-start-ticks "$launcher_start_ticks")
 [[ "$MODE" != --preflight-only ]] || args+=(--preflight-only)
 [[ "$MCU_STATUS_COMMAND_FALLBACK" != 0 ]] || args+=(--no-command-status-fallback)
 setsid "$PYTHON_BIN" -u "$PROJECT_DIR/scripts/full_run_controller.py" "${args[@]}" \

@@ -47,12 +47,32 @@ def run(kind):
         time.sleep(.01)
     return 0
 if name=='docker':
+    existing=Path(os.environ['EVENTS']).read_text() if Path(os.environ['EVENTS']).exists() else ''
+    removed_at=existing.rfind('DOCKER_REMOVE')
+    current_started=existing.rfind('START yolo') > removed_at
+    stale_present=bool(os.environ.get('CONTAINER')) and removed_at < 0
     if args[:2]==['container','inspect'] and '--format' in args:
-        print(os.environ.get('YOLO_RUNTIME_OWNER',''))
-        sys.exit(0)
-    if args[:2]==['container','inspect']: sys.exit(0 if os.environ.get('CONTAINER') else 1)
+        if stale_present:
+            template=args[args.index('--format')+1]
+            labels={'amr.full_run.owner':os.environ.get('EXISTING_CONTAINER_OWNER',''),
+                    'amr.full_run.project_dir':os.environ.get('EXISTING_CONTAINER_PROJECT',''),
+                    'amr.full_run.supervisor_pid':os.environ.get('EXISTING_CONTAINER_PID',''),
+                    'amr.full_run.supervisor_start_ticks':os.environ.get('EXISTING_CONTAINER_TICKS','')}
+            print(next((value for label,value in labels.items() if label in template), ''))
+            sys.exit(0)
+        if current_started:
+            template=args[args.index('--format')+1]
+            labels={'amr.full_run.owner':os.environ.get('YOLO_RUNTIME_OWNER',''),
+                    'amr.full_run.project_dir':os.environ.get('FULL_RUN_PROJECT_DIR',''),
+                    'amr.full_run.supervisor_pid':os.environ.get('FULL_RUN_SUPERVISOR_PID',''),
+                    'amr.full_run.supervisor_start_ticks':os.environ.get('FULL_RUN_SUPERVISOR_START_TICKS','')}
+            print(next((value for label,value in labels.items() if label in template), ''))
+            sys.exit(0)
+        sys.exit(1)
+    if args[:2]==['container','inspect']: sys.exit(0 if stale_present or current_started else 1)
     if args[:1]==['info']: print(json.dumps({'nvidia':{}}))
     if args[:1]==['stop']: event('DOCKER_STOP')
+    if args[:2]==['rm','-f']: event('DOCKER_REMOVE')
     sys.exit(0)
 if name=='fuser':
     resource=args[-1] if args else ''
@@ -204,6 +224,16 @@ class FullRunLauncherTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0, result.stdout)
             self.assertTrue(all(event == "AUTO_BUNDLE" for event in events), events)
             self.assertTrue(list((self.root / "logs/full_run").glob("*-debug.tar.gz")))
+
+    def test_stale_labeled_full_run_container_is_removed_before_start(self):
+        result, events = self.run_launcher(
+            CONTAINER="1", EXISTING_CONTAINER_OWNER="old-full-run",
+            EXISTING_CONTAINER_PROJECT=str(self.root), EXISTING_CONTAINER_PID="99999999",
+            EXISTING_CONTAINER_TICKS="123")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("DOCKER_REMOVE", events)
+        self.assertIn("START controller", events)
+        self.check_stopped(events)
 
     def test_concurrent_run_rejected(self):
         with (self.root / ".run/full_run.lock").open("w") as lock:

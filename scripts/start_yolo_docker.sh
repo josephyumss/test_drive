@@ -18,6 +18,12 @@ extra_args=()
 runtime_labels=()
 if [[ -n "${YOLO_RUNTIME_OWNER:-}" ]]; then
   runtime_labels+=(--label "amr.full_run.owner=$YOLO_RUNTIME_OWNER")
+  if [[ -n "${FULL_RUN_PROJECT_DIR:-}" && -n "${FULL_RUN_SUPERVISOR_PID:-}" \
+      && -n "${FULL_RUN_SUPERVISOR_START_TICKS:-}" ]]; then
+    runtime_labels+=(--label "amr.full_run.project_dir=$FULL_RUN_PROJECT_DIR")
+    runtime_labels+=(--label "amr.full_run.supervisor_pid=$FULL_RUN_SUPERVISOR_PID")
+    runtime_labels+=(--label "amr.full_run.supervisor_start_ticks=$FULL_RUN_SUPERVISOR_START_TICKS")
+  fi
 fi
 if [[ "$YOLO_HALF" == "1" ]]; then
   extra_args+=(--half)
