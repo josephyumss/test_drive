@@ -45,6 +45,9 @@ class FullRunConfig:
     return_rpm: int = 14
     acceleration_rpm_s: float = 5.0
     deceleration_rpm_s: float = 10.0
+    turn_acceleration_rpm_s: float = 15.0
+    turn_deceleration_rpm_s: float = 25.0
+    avoidance_handle_ratio: float = 0.30
     lookahead_m: float = 0.25
     path_completion_m: float = 0.08
     sensor_timeout_s: float = 1.0
@@ -103,6 +106,8 @@ class FullRunConfig:
             raise ValueError("maximum_rpm must be 1..25 (Jetson full-run speed limit)")
         if not 0 < self.minimum_confidence <= 1 or not 1 < self.camera_horizontal_fov_deg < 179:
             raise ValueError("Invalid confidence/camera FOV")
+        if not 0.1 <= self.avoidance_handle_ratio <= 0.5:
+            raise ValueError("avoidance_handle_ratio must be within 0.1..0.5")
         if len({self.left_trig, self.left_echo, self.right_trig, self.right_echo}) != 4:
             raise ValueError("GPIO pins must be distinct")
         if any(pin > 40 for pin in (self.left_trig, self.left_echo, self.right_trig, self.right_echo)):
@@ -246,8 +251,12 @@ class FullRunController:
         self.motion_expected_since = None
 
     def ramp_command(self, target, dt):
+        turning = (self.state == "RUNNING" and self.phase in ("ENTRY", "RETURN")
+                   and max(target) > 0)
+        acceleration = self.c.turn_acceleration_rpm_s if turning else self.c.acceleration_rpm_s
+        deceleration = self.c.turn_deceleration_rpm_s if turning else self.c.deceleration_rpm_s
         for i, value in enumerate(target):
-            rate = self.c.acceleration_rpm_s if value > self.ramped[i] else self.c.deceleration_rpm_s
+            rate = acceleration if value > self.ramped[i] else deceleration
             delta = max(-rate * dt, min(rate * dt, value - self.ramped[i]))
             self.ramped[i] += delta
         self.command = tuple(round(value) for value in self.ramped)
@@ -457,7 +466,8 @@ class FullRunController:
     def make_path(self, x, y):
         path = CubicBezierPath.from_poses(start_x_m=self.odom.x_m, start_y_m=self.odom.y_m,
                                          start_yaw_rad=self.odom.yaw_rad, goal_x_m=x,
-                                         goal_y_m=y, goal_yaw_rad=0.0)
+                                         goal_y_m=y, goal_yaw_rad=0.0,
+                                         handle_ratio=self.c.avoidance_handle_ratio)
         self.follower = FullRunPathFollower(path, lookahead_m=self.c.lookahead_m,
                                            completion_radius_m=self.c.path_completion_m,
                                            completion_heading_tolerance_rad=math.radians(3))
