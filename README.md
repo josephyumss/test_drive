@@ -1,4 +1,6 @@
 =====================================
+sudo fuser -k -TERM 5005/udp 8081/tcp 2>/dev/null || true; sudo bash scripts/start_full_run.sh
+
 수동 실행 전용 (systemd 자동 실행 사용 안 함)
 
 기존에 자동 서비스를 설치한 Jetson에서 최초 한 번만 실행
