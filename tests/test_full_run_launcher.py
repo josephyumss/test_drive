@@ -1,6 +1,7 @@
 """Real Linux shell/process ownership checks with fake robot devices."""
 import os
 from pathlib import Path
+import signal
 import shutil
 import subprocess
 import tempfile
@@ -84,6 +85,10 @@ if name=='fuser':
     if (os.environ.get('LINGER_RESOURCE') and resource.endswith('/lidar')
             and 'TERM lidar' in existing and marker not in existing):
         print('4242')
+        sys.exit(0)
+    if (os.environ.get('STALE_RESOURCE') and resource.endswith(os.environ['STALE_RESOURCE'])
+            and marker not in existing):
+        print('4343')
         sys.exit(0)
     sys.exit(0 if os.environ.get('BUSY') else 1)
 if name=='ros2':
@@ -231,6 +236,14 @@ class FullRunLauncherTests(unittest.TestCase):
         self.assertIn("START controller", events)
         self.check_stopped(events)
 
+    def test_stale_lidar_owner_is_removed_automatically_before_start(self):
+        result, events = self.run_launcher(STALE_RESOURCE="/lidar")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        release = next(i for i, event in enumerate(events)
+                       if event.startswith("FUSER_KILL ") and event.endswith("/lidar"))
+        self.assertLess(release, events.index("START controller"))
+        self.check_stopped(events)
+
     def test_stale_labeled_full_run_container_is_removed_before_start(self):
         result, events = self.run_launcher(
             CONTAINER="1", EXISTING_CONTAINER_OWNER="old-full-run",
@@ -317,6 +330,25 @@ class FullRunLauncherTests(unittest.TestCase):
         self.check_stopped(self.events())
         result, _ = self.run_launcher()
         self.assertEqual(result.returncode, 0, result.stdout)
+
+    def test_ctrl_c_runs_complete_sensor_cleanup(self):
+        process = subprocess.Popen(["/bin/bash", "scripts/start_full_run.sh"], cwd=self.root,
+                                   env=dict(self.environment, BEHAVIOR="long"), stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT, text=True)
+        import time
+        deadline = time.monotonic()+5
+        while "START yolo" not in self.events() and time.monotonic() < deadline:
+            time.sleep(.02)
+        try:
+            process.send_signal(signal.SIGINT)
+            output, _ = process.communicate(timeout=10)
+            self.assertEqual(process.returncode, 0, output)
+            self.assertIn("[STOP] Interrupt received", output)
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=10)
+        self.check_stopped(self.events())
 
 
 if __name__ == "__main__":

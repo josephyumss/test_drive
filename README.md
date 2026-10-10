@@ -1,7 +1,5 @@
 =====================================
 git pull --ff-only origin main
-sudo docker rm -f socialguide-amr-yolo 2>/dev/null || true
-sudo fuser -k -TERM /dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0 5005/udp 8081/tcp 2>/dev/null || true
 sudo bash scripts/start_full_run.sh
 
 
@@ -40,7 +38,7 @@ sudo chown -R "$(id -un):$(id -gn)" .git
 sudo chmod -R u+rwX .git
 
 
-cd ~/Projects/test_drive && sudo systemctl stop amr-full-run.service; sudo bash scripts/start_full_run.sh --stop; sudo fuser -k -TERM /dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0 2>/dev/null || true
+비정상 종료 뒤에도 `sudo bash scripts/start_full_run.sh`를 다시 실행하면 남은 LiDAR·YOLO 자원을 먼저 자동 정리합니다.
 
 =====================================
 

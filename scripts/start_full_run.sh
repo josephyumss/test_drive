@@ -149,15 +149,43 @@ echo "[INFO] command=$MCU_DEVICE status=$MCU_STATUS_DEVICE command_RX_fallback=$
 echo '[INFO] Default legacy uses existing $CMD/$STATUS, without a firmware update. Live status RX is required; no open-loop fallback.'
 [[ "$MODE" != --check ]] || { echo '[CHECK] Installation/configuration passed; live sensors and firmware not checked.'; exit 0; }
 
+release_runtime_resources() {
+    local resource owners remaining=0
+    local -a resources=("$LIDAR_DEVICE" "5005/udp" "8081/tcp")
+    for resource in "${resources[@]}"; do
+        owners="$(fuser "$resource" 2>/dev/null || true)"
+        [[ -n "$owners" ]] || continue
+        echo "[CLEANUP] Releasing stale owner(s) of $resource: $owners"
+        fuser -k -TERM "$resource" >> "$LOG_DIR/shutdown.log" 2>&1 || true
+    done
+    sleep 0.2
+    for resource in "${resources[@]}"; do
+        owners="$(fuser "$resource" 2>/dev/null || true)"
+        [[ -n "$owners" ]] || continue
+        echo "[CLEANUP] Forcing stale owner(s) off $resource: $owners"
+        fuser -k -KILL "$resource" >> "$LOG_DIR/shutdown.log" 2>&1 || true
+    done
+    sleep 0.1
+    for resource in "${resources[@]}"; do
+        owners="$(fuser "$resource" 2>/dev/null || true)"
+        if [[ -n "$owners" ]]; then
+            echo "[CLEANUP FAIL] $resource is still owned by:$owners"
+            remaining=1
+        fi
+    done
+    return "$remaining"
+}
+
 # The lock prevents two full-run launchers from managing the same fixed-name
-# runtime at once. Serial owners are still never touched here, but a leftover
-# container with this launcher's dedicated name is safe to remove before a new
-# run.
+# runtime at once. Never take an MCU UART from another controller. LiDAR and
+# vision ports are dedicated to this runtime, so clear their orphaned owners
+# before every new run.
 exec 9>"$RUN_DIR/full_run.lock"
 flock -n 9 || fail 'A full run is already active. Use --stop before starting manually.'
-for device in "$MCU_DEVICE" "$MCU_STATUS_DEVICE" "$LIDAR_DEVICE"; do
+for device in "$MCU_DEVICE" "$MCU_STATUS_DEVICE"; do
     fuser "$device" >/dev/null 2>&1 && fail "Another process owns $device; stop its launcher first."
 done
+release_runtime_resources || fail 'LiDAR/vision resources remain busy after automatic cleanup.'
 if docker container inspect socialguide-amr-yolo >/dev/null 2>&1; then
     echo '[CLEANUP] Removing leftover socialguide-amr-yolo container before start'
     docker rm -f socialguide-amr-yolo >> "$LOG_DIR/shutdown.log" 2>&1 || true
@@ -243,33 +271,6 @@ diagnostics_pid=''
 diagnostics_reported=0
 failure_reason='runtime_exit'
 
-release_runtime_resources() {
-    local resource owners remaining=0
-    local -a resources=("$LIDAR_DEVICE" "5005/udp" "8081/tcp")
-    for resource in "${resources[@]}"; do
-        owners="$(fuser "$resource" 2>/dev/null || true)"
-        [[ -n "$owners" ]] || continue
-        echo "[CLEANUP] Releasing stale owner(s) of $resource: $owners"
-        fuser -k -TERM "$resource" >> "$LOG_DIR/shutdown.log" 2>&1 || true
-    done
-    sleep 0.2
-    for resource in "${resources[@]}"; do
-        owners="$(fuser "$resource" 2>/dev/null || true)"
-        [[ -n "$owners" ]] || continue
-        echo "[CLEANUP] Forcing stale owner(s) off $resource: $owners"
-        fuser -k -KILL "$resource" >> "$LOG_DIR/shutdown.log" 2>&1 || true
-    done
-    sleep 0.1
-    for resource in "${resources[@]}"; do
-        owners="$(fuser "$resource" 2>/dev/null || true)"
-        if [[ -n "$owners" ]]; then
-            echo "[CLEANUP FAIL] $resource is still owned by:$owners"
-            remaining=1
-        fi
-    done
-    return "$remaining"
-}
-
 cleanup() {
     local result=$? forced=0 pid
     trap - EXIT INT TERM ERR
@@ -351,7 +352,7 @@ PY
     exit "$result"
 }
 trap cleanup EXIT
-trap 'exit 0' INT TERM HUP
+trap 'echo "[STOP] Interrupt received; cleaning up controller, LiDAR and YOLO."; exit 0' INT TERM HUP
 launcher_start_ticks="$(awk '{print $22}' "/proc/$$/stat")"
 export FULL_RUN_SUPERVISOR_PID="$$" FULL_RUN_SUPERVISOR_START_TICKS="$launcher_start_ticks"
 export FULL_RUN_PROJECT_DIR="$PROJECT_DIR"
