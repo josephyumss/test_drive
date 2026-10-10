@@ -9,6 +9,10 @@ git pull --ff-only origin main \
   && sudo systemctl restart amr-full-run.service
 
 
+sudo bash scripts/install_full_run_service.sh && sudo systemctl restart amr-full-run.service
+
+sudo systemctl status amr-full-run.service
+
 프로세스 수동 실행
 
 sudo systemctl stop amr-full-run.service \
