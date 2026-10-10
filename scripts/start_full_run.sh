@@ -176,6 +176,19 @@ release_runtime_resources() {
     return "$remaining"
 }
 
+remove_yolo_container() {
+    local attempt
+    for attempt in {1..50}; do
+        docker container inspect socialguide-amr-yolo >/dev/null 2>&1 || return 0
+        # Killing the host-network UDP owner can trigger Docker's --rm at the
+        # same time. Repeated removal is harmless while that async delete is
+        # already in progress.
+        docker rm -f socialguide-amr-yolo >> "$LOG_DIR/shutdown.log" 2>&1 || true
+        sleep 0.1
+    done
+    ! docker container inspect socialguide-amr-yolo >/dev/null 2>&1
+}
+
 # The lock prevents two full-run launchers from managing the same fixed-name
 # runtime at once. Never take an MCU UART from another controller. LiDAR and
 # vision ports are dedicated to this runtime, so clear their orphaned owners
@@ -188,9 +201,8 @@ done
 release_runtime_resources || fail 'LiDAR/vision resources remain busy after automatic cleanup.'
 if docker container inspect socialguide-amr-yolo >/dev/null 2>&1; then
     echo '[CLEANUP] Removing leftover socialguide-amr-yolo container before start'
-    docker rm -f socialguide-amr-yolo >> "$LOG_DIR/shutdown.log" 2>&1 || true
-    docker container inspect socialguide-amr-yolo >/dev/null 2>&1 \
-        && fail 'Leftover socialguide-amr-yolo container could not be removed.'
+    remove_yolo_container \
+        || fail 'Leftover socialguide-amr-yolo container still exists after 5 seconds of cleanup retries.'
 fi
 "$PYTHON_BIN" - <<'PY'
 import socket
@@ -318,9 +330,8 @@ PY
         # yolo_owned is set only after this locked launcher starts the wrapper.
         # Removing by the dedicated name also handles a killed docker client,
         # missing labels, and --rm containers that survived terminal Ctrl+C.
-        docker rm -f socialguide-amr-yolo >> "$LOG_DIR/shutdown.log" 2>&1 || true
-        if docker container inspect socialguide-amr-yolo >/dev/null 2>&1; then
-            echo '[CLEANUP FAIL] YOLO container still exists after forced removal.'
+        if ! remove_yolo_container; then
+            echo '[CLEANUP FAIL] YOLO container still exists after 5 seconds of forced-removal retries.'
             result=1
             failure_reason="${failure_reason}_yolo_container_release_failed"
         fi

@@ -52,6 +52,8 @@ if name=='docker':
     removed_at=existing.rfind('DOCKER_REMOVE')
     current_started=existing.rfind('START yolo') > removed_at
     stale_present=bool(os.environ.get('CONTAINER')) and removed_at < 0
+    delayed_removal=(removed_at >= 0 and bool(os.environ.get('CONTAINER_REMOVE_DELAY'))
+                     and existing.count('DOCKER_REMOVE_PENDING') < int(os.environ['CONTAINER_REMOVE_DELAY']))
     if args[:2]==['container','inspect'] and '--format' in args:
         if stale_present:
             template=args[args.index('--format')+1]
@@ -70,7 +72,10 @@ if name=='docker':
             print(next((value for label,value in labels.items() if label in template), ''))
             sys.exit(0)
         sys.exit(1)
-    if args[:2]==['container','inspect']: sys.exit(0 if stale_present or current_started else 1)
+    if args[:2]==['container','inspect']:
+        if delayed_removal:
+            event('DOCKER_REMOVE_PENDING')
+        sys.exit(0 if stale_present or current_started or delayed_removal else 1)
     if args[:1]==['info']: print(json.dumps({'nvidia':{}}))
     if args[:1]==['stop']: event('DOCKER_STOP')
     if args[:2]==['rm','-f']: event('DOCKER_REMOVE')
@@ -233,6 +238,14 @@ class FullRunLauncherTests(unittest.TestCase):
         result, events = self.run_launcher(CONTAINER="1")
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertIn("DOCKER_REMOVE", events)
+        self.assertIn("START controller", events)
+        self.check_stopped(events)
+
+    def test_container_auto_remove_race_is_retried_before_start(self):
+        result, events = self.run_launcher(CONTAINER="1", CONTAINER_REMOVE_DELAY="3")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(events.count("DOCKER_REMOVE_PENDING"), 3)
+        self.assertGreaterEqual(events.count("DOCKER_REMOVE"), 2)
         self.assertIn("START controller", events)
         self.check_stopped(events)
 
