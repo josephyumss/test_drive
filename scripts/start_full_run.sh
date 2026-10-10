@@ -323,7 +323,7 @@ args=(--config "$FULL_RUN_CONFIG" --port "$MCU_DEVICE" --status-port "$MCU_STATU
 [[ "$MODE" != --preflight-only ]] || args+=(--preflight-only)
 [[ "$MCU_STATUS_COMMAND_FALLBACK" != 0 ]] || args+=(--no-command-status-fallback)
 setsid "$PYTHON_BIN" -u "$PROJECT_DIR/scripts/full_run_controller.py" "${args[@]}" \
-    > "$LOG_DIR/controller.log" 2>&1 9>&- &
+    > >(tee -a "$LOG_DIR/controller.log" 9>&-) 2>&1 9>&- &
 controller_pid=$!
 setsid ros2 run ldlidar_stl_ros2 ldlidar_stl_ros2_node --ros-args \
     -p product_name:=LDLiDAR_STL27L -p topic_name:=scan -p frame_id:=base_laser \

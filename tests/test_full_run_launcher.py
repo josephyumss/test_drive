@@ -19,6 +19,9 @@ def event(s):
     with open(os.environ['EVENTS'], 'a') as f: f.write(s+'\n')
 def run(kind):
     event('START '+kind)
+    if kind=='controller':
+        print('[STARTUP] fake_controller', flush=True)
+        print('[READY] fake_controller', flush=True)
     stopped=False
     fault_written=False
     def stop(*_):
@@ -149,8 +152,13 @@ class FullRunLauncherTests(unittest.TestCase):
     def test_normal_cleanup_and_logs(self):
         result, events = self.run_launcher()
         self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("[STARTUP] fake_controller", result.stdout)
+        self.assertIn("[READY] fake_controller", result.stdout)
         self.check_stopped(events)
         folder = self.root / "logs/full_run/latest"
+        controller_log = (folder / "controller.log").read_text()
+        self.assertIn("[STARTUP] fake_controller", controller_log)
+        self.assertIn("[READY] fake_controller", controller_log)
         self.assertTrue((folder / "config.json").exists())
         self.assertTrue((folder / "source.sha256").exists())
         self.assertTrue((folder / "system.txt").exists())

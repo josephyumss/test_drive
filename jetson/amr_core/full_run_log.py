@@ -43,6 +43,21 @@ class FlightRecorder:
                   "event": event, **data}
         self.logger.info(json.dumps(json_safe(record), ensure_ascii=False, allow_nan=False,
                                     separators=(",", ":")))
+        if event == "startup_step":
+            print(f"[STARTUP] {data.get('stage', 'unknown')}", flush=True)
+            return
+        if event == "state":
+            before = data.get("before", "unknown")
+            after = data.get("after", "unknown")
+            reason = data.get("reason", "")
+            print(f"[STATE] {before} -> {after}: {reason}", flush=True)
+            if after == "READY":
+                print("[READY] Sensors and STM32 are live. Robot is stationary; press physical UP to start.",
+                      flush=True)
+            return
+        if event == "ready":
+            print(f"[READY] {data.get('message', 'Readiness checks passed.')}", flush=True)
+            return
         if event in {"state", "phase", "exception", "ready", "resume_denied", "shutdown", "handshake",
                      "legacy_button_limit", "legacy_initial_speed_ignored", "legacy_instant_stop",
                      "legacy_stop_acknowledged", "legacy_stop_UP_consumed",

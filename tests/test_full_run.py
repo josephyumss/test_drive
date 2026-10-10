@@ -479,6 +479,21 @@ class ProtocolAndLogTests(unittest.TestCase):
                     self.assertIn("monotonic_s", record)
                     self.assertIn("utc", record)
 
+    def test_flight_recorder_prints_human_readable_startup_and_ready(self):
+        import contextlib
+        import io
+
+        with tempfile.TemporaryDirectory() as folder, contextlib.redirect_stdout(io.StringIO()) as output:
+            recorder = FlightRecorder(folder)
+            recorder.emit("startup_step", stage="open_command_UART")
+            recorder.emit("state", before="STARTUP", after="READY", reason="fresh_feeds_wait_new_UP")
+            recorder.close()
+
+        console = output.getvalue()
+        self.assertIn("[STARTUP] open_command_UART", console)
+        self.assertIn("[STATE] STARTUP -> READY: fresh_feeds_wait_new_UP", console)
+        self.assertIn("[READY] Sensors and STM32 are live", console)
+
 
 if __name__ == "__main__":
     unittest.main()
