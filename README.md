@@ -6,7 +6,7 @@ git pull --ff-only origin main \
   && sudo bash scripts/start_full_run.sh --check \
   && sudo bash scripts/start_full_run.sh --preflight-only \
   && sudo bash scripts/install_full_run_service.sh \
-  && sudo systemctl start amr-full-run.service
+  && sudo systemctl restart amr-full-run.service
 
 
 프로세스 수동 실행
