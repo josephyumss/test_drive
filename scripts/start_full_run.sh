@@ -244,10 +244,10 @@ cleanup() {
     if [[ -n "$controller_pid" ]]; then
         kill -TERM -- "-$controller_pid" 2>/dev/null
         for _ in {1..30}; do
-            kill -0 "$controller_pid" 2>/dev/null || break
+            kill -0 -- "-$controller_pid" 2>/dev/null || break
             sleep 0.1
         done
-        if kill -0 "$controller_pid" 2>/dev/null; then
+        if kill -0 -- "-$controller_pid" 2>/dev/null; then
             kill -KILL -- "-$controller_pid" 2>/dev/null
             forced=1
         fi
@@ -289,8 +289,11 @@ PY
         fi
     fi
     for pid in "${sensor_pids[@]}"; do
-        for _ in {1..20}; do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
-        kill -KILL -- "-$pid" 2>/dev/null
+        for _ in {1..20}; do kill -0 -- "-$pid" 2>/dev/null || break; sleep 0.1; done
+        if kill -0 -- "-$pid" 2>/dev/null; then
+            kill -KILL -- "-$pid" 2>/dev/null
+            forced=1
+        fi
         wait "$pid"
         echo "[CHILD EXIT] pid=$pid exit=$? phase=cleanup"
     done
