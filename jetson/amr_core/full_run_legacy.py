@@ -65,7 +65,7 @@ def validate_legacy_status(line):
 
 
 class LegacyControlAdapter:
-    def __init__(self, session, maximum_rpm=20, emit=None):
+    def __init__(self, session, maximum_rpm=25, emit=None):
         self.session = session  # Local identifier only, NOT acknowledged by MCU.
         self.maximum_rpm = maximum_rpm
         self.emit = emit or (lambda *_args, **_kwargs: None)

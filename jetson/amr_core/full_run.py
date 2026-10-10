@@ -39,7 +39,7 @@ class FullRunConfig:
     minimum_confidence: float = 0.45
     detection_frames: int = 3
     trigger_distance_m: float = 2.0
-    maximum_rpm: int = 20
+    maximum_rpm: int = 25
     entry_rpm: int = 12
     bypass_rpm: int = 16
     return_rpm: int = 14
@@ -99,8 +99,8 @@ class FullRunConfig:
                     "left_echo", "right_trig", "right_echo", "log_max_bytes", "log_backup_count"):
             if type(getattr(self, key)) is not int:
                 raise ValueError(f"{key}: integer required")
-        if not 1 <= self.maximum_rpm <= 20:
-            raise ValueError("maximum_rpm must be 1..20 (Jetson full-run speed limit)")
+        if not 1 <= self.maximum_rpm <= 25:
+            raise ValueError("maximum_rpm must be 1..25 (Jetson full-run speed limit)")
         if not 0 < self.minimum_confidence <= 1 or not 1 < self.camera_horizontal_fov_deg < 179:
             raise ValueError("Invalid confidence/camera FOV")
         if len({self.left_trig, self.left_echo, self.right_trig, self.right_echo}) != 4:
@@ -151,7 +151,7 @@ class ControlStatus:
             raise ValueError("Expected $CTRL version 1, 12/14 fields; use legacy mode for existing $STATUS firmware")
         vals = [int(v) for v in parts[2:]]
         s = cls(*vals)
-        if (not 1 <= s.session <= 0x7fffffff or not 0 <= s.base_rpm <= 20
+        if (not 1 <= s.session <= 0x7fffffff or not 0 <= s.base_rpm <= 25
                 or not 0 <= s.stop_flags <= 3 or s.fault not in (0, 1, 2)
                 or any(not 0 <= v <= 0xffffffff for v in
                        (s.up_count, s.down_count, s.stop_count, s.uptime_ms))
@@ -237,19 +237,35 @@ class FullRunController:
         self.resume_up_floor = 0
         self.pending_up = False
         self.fault_reason = None
+        self.paused_fault_reason = None
         self.preflight_ready = False
 
-    def change(self, state, reason):
+    def stop_now(self):
+        self.ramped = [0.0, 0.0]
+        self.command = (0, 0)
+        self.motion_expected_since = None
+
+    def ramp_command(self, target, dt):
+        for i, value in enumerate(target):
+            rate = self.c.acceleration_rpm_s if value > self.ramped[i] else self.c.deceleration_rpm_s
+            delta = max(-rate * dt, min(rate * dt, value - self.ramped[i]))
+            self.ramped[i] += delta
+        self.command = tuple(round(value) for value in self.ramped)
+        return self.command
+
+    def change(self, state, reason, *, immediate=False):
         old = self.state
         self.state, self.reason = state, reason
         if state != "RUNNING":
-            self.ramped = [0.0, 0.0]
-            self.command = (0, 0)
+            if immediate or state in ("STARTUP", "READY", "FAULT_STOP"):
+                self.stop_now()
             self.pending_up = False
             if self.status:
                 self.resume_up_floor = self.status.up_count
+        if state == "RUNNING":
+            self.paused_fault_reason = None
         self.emit("state", before=old, after=state, phase=self.phase, reason=reason,
-                  pose=self.pose())
+                  immediate_stop=immediate, pose=self.pose())
 
     def set_phase(self, phase):
         before = self.phase
@@ -257,13 +273,19 @@ class FullRunController:
         self.emit("phase", before=before, after=phase, pose=self.pose())
 
     def fault(self, reason):
+        if self.state == "PAUSED":
+            if reason != self.paused_fault_reason:
+                self.paused_fault_reason = reason
+                self.emit("fault_suppressed_while_paused", reason=reason, phase=self.phase,
+                          pose=self.pose())
+            return
         if self.state != "FAULT_STOP":
             self.fault_reason = reason
-            self.change("FAULT_STOP", reason)
+            self.change("FAULT_STOP", reason, immediate=True)
 
-    def pause(self, reason):
+    def pause(self, reason, *, immediate=False):
         if self.state == "RUNNING":
-            self.change("PAUSED", reason)
+            self.change("PAUSED", reason, immediate=immediate)
             self.clear_count = 0  # Old samples must not count after resume.
 
     def pose(self):
@@ -296,7 +318,7 @@ class FullRunController:
             if status.uptime_ms < previous.uptime_ms and previous.uptime_ms - status.uptime_ms < 0x80000000:
                 self.fault("STM32_uptime_regressed")
             if status.stop_count != previous.stop_count or status.stop_flags:
-                self.pause("user_instant_stop")
+                self.pause("user_instant_stop", immediate=True)
             elif status.base_rpm == 0:
                 self.pause("user_speed_zero")
             if status.up_count != previous.up_count:
@@ -353,6 +375,8 @@ class FullRunController:
             r = self.sides.get(side)
             if r is None or not self.fresh(r.stamp, now) or r.status == "FAULT":
                 errors.append(f"ultrasonic_{side}_missing_stale_or_fault")
+        if self.status is not None and self.status.fault:
+            errors.append(f"STM32_fault_{self.status.fault}")
         if self.front is None:
             errors.append("lidar_front_invalid_coverage")
         return errors
@@ -523,7 +547,7 @@ class FullRunController:
             if target:
                 self.freeze_target(target)
         elif self.phase in ("STOPPING", "WAIT_DIRECTION"):
-            if self.active_s - self.phase_started >= 0.3:
+            if max(abs(value) for value in self.ramped) < 0.5 and self.active_s - self.phase_started >= 0.3:
                 self.choose_entry()
         elif self.phase in ("ENTRY", "RETURN"):
             if self.active_s - self.phase_started > self.c.path_timeout_s:
@@ -538,7 +562,8 @@ class FullRunController:
                     self.side_seen = False
                     self.set_phase("DRIVE")
         elif self.phase in ("BASELINE", "PASS", "REAR_CLEARANCE"):
-            self.side_evidence()
+            if self.phase != "BASELINE" or max(abs(value) for value in self.ramped) < 0.5:
+                self.side_evidence()
             if self.phase == "PASS":
                 distance = self.odom.distance_travelled_m - self.pass_start
                 if not self.side_seen and distance > self.c.seek_max_distance_m:
@@ -597,6 +622,7 @@ class FullRunController:
             return 0, 0
         if dt < 0 or dt > 0.25:
             self.fault("control_loop_gap_over_250ms")
+            self.stop_now()
             return 0, 0
         errors = self.health_errors(now)
         if self.state == "STARTUP":
@@ -625,12 +651,13 @@ class FullRunController:
             if not recoverable:
                 self.fault(reason)
             elif self.state == "RUNNING":
-                self.pause(reason)
-            elif self.pending_up:
+                self.pause(reason, immediate=True)
+            if self.state != "RUNNING" and self.pending_up:
                 self.pending_up = False
                 if self.status:
                     self.resume_up_floor = self.status.up_count
                 self.emit("resume_denied", reason=reason)
+            self.stop_now()
             return 0, 0
         blocker = self.blocking_reason(resume=self.state != "RUNNING")
         if self.state in ("READY", "PAUSED"):
@@ -657,24 +684,16 @@ class FullRunController:
                     self.progress_distance = self.odom.distance_travelled_m
                     self.change("RUNNING", "new_UP_resume_saved_phase")
             if self.state != "RUNNING":
-                return 0, 0
+                return self.ramp_command((0, 0), dt)
         if blocker:
             self.pause(blocker)
-            return 0, 0
+            return self.ramp_command((0, 0), dt)
         self.active_s += max(0, dt)
         self.update_phase()
         if self.state != "RUNNING":
-            return 0, 0
+            return self.ramp_command((0, 0), dt)
         desired = self.desired_command()
-        # Stationary planning/baseline stages stop immediately.
-        if desired == (0, 0):
-            self.ramped = [0.0, 0.0]
-        else:
-            for i, target in enumerate(desired):
-                rate = self.c.acceleration_rpm_s if target > self.ramped[i] else self.c.deceleration_rpm_s
-                delta = max(-rate * dt, min(rate * dt, target - self.ramped[i]))
-                self.ramped[i] += delta
-        self.command = tuple(round(v) for v in self.ramped)
+        self.ramp_command(desired, dt)
         if max(self.command) >= 3:
             if self.motion_expected_since is None:
                 self.motion_expected_since = now
@@ -705,6 +724,7 @@ class FullRunController:
                 "sides": {k: asdict(v) for k, v in self.sides.items()}, "front_m": self.front,
                 "front_bumper_clearance_m": self.front_clearance_m(),
                 "health_errors": self.health_errors(now), "fault_reason": self.fault_reason,
+                "paused_fault_reason": self.paused_fault_reason,
                 "clearance_evidence": {"nearest_front_corridor_point_xy_m": nearest,
                                        "points_inside_configured_body": sum(
                                            abs(d * math.cos(a)) <= self.c.robot_length_m / 2

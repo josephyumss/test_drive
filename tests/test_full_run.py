@@ -77,10 +77,11 @@ class FullRunTests(unittest.TestCase):
     def test_configuration_geometry(self):
         self.assertAlmostEqual(self.config.expected_side_range_m, 0.45)
         self.assertAlmostEqual(self.config.rear_clearance_m, 0.575)
+        self.assertEqual(self.config.maximum_rpm, 25)
 
     def test_config_rejects_overlapping_thresholds_and_duplicate_pins(self):
         for config in (replace(self.config, side_stop_m=0.45), replace(self.config, right_echo=31),
-                       replace(self.config, maximum_rpm=65), replace(self.config, wheel_base_m=0)):
+                       replace(self.config, maximum_rpm=30), replace(self.config, wheel_base_m=0)):
             with self.assertRaises(ValueError):
                 config.validate()
 
@@ -104,6 +105,51 @@ class FullRunTests(unittest.TestCase):
             self.assertGreaterEqual(command[0], previous)
             previous = command[0]
         self.assertEqual(command, (10, 10))
+
+    def test_environmental_pause_decelerates_and_resume_accelerates(self):
+        self.start()
+        for _ in range(120):
+            command = self.step()
+        self.assertEqual(command, (10, 10))
+        first = self.step(front=0.20)
+        self.assertEqual(self.core.state, "PAUSED")
+        self.assertGreater(first[0], 0)
+        self.assertLess(self.core.ramped[0], 10)
+        previous = first[0]
+        for _ in range(80):
+            command = self.step(front=0.20)
+            self.assertLessEqual(command[0], previous)
+            previous = command[0]
+        self.assertEqual(command, (0, 0))
+        self.step(front=4.0)
+        resumed = self.up(10)
+        self.assertEqual(self.core.state, "RUNNING")
+        self.assertLess(resumed[0], 10)
+
+    def test_faults_are_suppressed_while_paused_and_recovery_can_resume(self):
+        self.start()
+        self.step(front=0.20)
+        self.assertEqual(self.core.state, "PAUSED")
+        self.core.update_side(SideReading("right", self.now, "FAULT", detail="lifted"))
+        self.assertEqual(self.core.state, "PAUSED")
+        self.assertEqual(self.core.paused_fault_reason, "ultrasonic_right:lifted")
+        self.status = replace(self.status, up_count=self.status.up_count + 1, base_rpm=10)
+        self.now += 0.02
+        self.status = replace(self.status, uptime_ms=int(self.now * 1000))
+        self.core.update_status(self.status, self.now)
+        self.core.update_camera([], self.now)
+        self.core.update_scan([], 4.0, self.now)
+        self.core.update_side(SideReading("left", self.now, "NO_ECHO"))
+        self.core.update_side(SideReading("right", self.now, "FAULT", detail="lifted"))
+        self.core.tick(self.now)
+        self.assertEqual(self.core.state, "PAUSED")
+        self.assertFalse(self.core.pending_up)
+        self.feed(front=4.0)
+        self.step()
+        self.assertEqual(self.core.state, "PAUSED")
+        self.up(10)
+        self.assertEqual(self.core.state, "RUNNING")
+        self.assertIsNone(self.core.paused_fault_reason)
 
     def test_user_pause_preserves_follower_and_phase(self):
         self.start()

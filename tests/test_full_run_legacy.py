@@ -55,8 +55,8 @@ class LegacyAdapterTests(unittest.TestCase):
 
     def test_software_limit_does_not_require_many_DOWN_presses(self):
         self.feed()
-        self.assertEqual(self.feed(60).base_rpm, 20)
-        self.assertEqual(self.feed(55).base_rpm, 15)
+        self.assertEqual(self.feed(60).base_rpm, 25)
+        self.assertEqual(self.feed(55).base_rpm, 20)
 
     def test_stop_preserves_speed_and_first_UP_restores_it(self):
         self.feed()

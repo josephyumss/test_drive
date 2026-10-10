@@ -64,6 +64,8 @@ class ServiceTemplateTests(unittest.TestCase):
         self.assertEqual([line for line in lines if line.startswith("WorkingDirectory=")],
                          ["WorkingDirectory=@PROJECT_DIR@"])
         self.assertIn('ExecStart=/bin/bash "@PROJECT_DIR@/scripts/start_full_run.sh"', lines)
+        self.assertIn("KillMode=control-group", lines)
+        self.assertIn("SendSIGKILL=yes", lines)
 
     @unittest.skipUnless(HAS_BASH, "No runnable Bash")
     def test_path_guard_accepts_internal_spaces_and_rejects_ambiguous_values(self):

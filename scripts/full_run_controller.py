@@ -339,7 +339,7 @@ def main(arguments=None):
                                 instant_stop_pending = True
                             # Consume any UP already received in this cycle,
                             # even if we were still READY/already PAUSED.
-                            core.change("PAUSED", "user_instant_stop_terminal")
+                            core.change("PAUSED", "user_instant_stop_terminal", immediate=True)
                 except (OSError, ValueError) as exc:
                     core.fault(f"user_stop_request_IO_or_format:{exc}")
                     recorder.emit("exception", context="user_stop_request", error=str(exc))
