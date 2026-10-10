@@ -1,22 +1,23 @@
 =====================================
-첫 실행 시 아래 커맨드, 터미널 창에다 복붙 실행
+수동 실행 전용 (systemd 자동 실행 사용 안 함)
+
+기존에 자동 서비스를 설치한 Jetson에서 최초 한 번만 실행
+
+sudo systemctl disable --now amr-full-run.service
+
+
+첫 설치/업데이트 후 점검
 
 git pull --ff-only origin main \
   && sudo bash scripts/setup_full_run.sh \
   && sudo bash scripts/start_full_run.sh --check \
-  && sudo bash scripts/start_full_run.sh --preflight-only \
-  && sudo bash scripts/install_full_run_service.sh \
-  && sudo systemctl restart amr-full-run.service
-
-
-sudo bash scripts/install_full_run_service.sh && sudo systemctl restart amr-full-run.service
-
-sudo systemctl status amr-full-run.service
+  && sudo bash scripts/start_full_run.sh --preflight-only
 
 프로세스 수동 실행
 
-sudo systemctl stop amr-full-run.service \
-  && sudo bash scripts/start_full_run.sh
+sudo bash scripts/start_full_run.sh
+
+터미널에 [READY]가 표시된 뒤 물리 UP 버튼을 누르면 출발
 
 프로세스 수동 정지는 터미널 창에서 Ctrl + C 
 
@@ -26,7 +27,7 @@ sudo systemctl stop amr-full-run.service \
 sudo tail -F ~/Projects/test_drive/logs/full_run/latest/controller.log
 
 
-자동 프로세스 끊기 : sudo systemctl stop amr-core.service
+혹시 자동 서비스가 다시 실행 중이면 끄기 : sudo systemctl disable --now amr-full-run.service
 
 sudo chown -R "$(id -un):$(id -gn)" .git
 sudo chmod -R u+rwX .git
