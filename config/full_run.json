@@ -9,7 +9,7 @@
   "rear_safety_margin_m": 0.15,            // 장애물 후단 통과 추가 여유(m); 키우면 더 지나간 뒤 복귀
   "side_sensor_x_m": 0.0,                  // 차체 중심 기준 측면센서 전후 위치(m); +는 전방
   "side_sensor_y_m": 0.25,                 // 차체 중심 기준 측면센서 좌우 거리(m); 키우면 센서가 차체 끝에 가까움
-  "lidar_x_m": 0.40,                        // 차체 중심 기준 LiDAR 전후 위치(m); +는 전방
+  "lidar_x_m": 0.0,                        // 차체 중심 기준 LiDAR 전후 위치(m); +는 전방
   "lidar_y_m": 0.0,                        // 차체 중심 기준 LiDAR 좌우 위치(m); +는 좌측
   "lidar_yaw_deg": 0.0,                    // 차체 정면 대비 LiDAR 장착각(도); +는 반시계
   "image_width_px": 640,                   // YOLO 입력 영상 폭(px); 실제 영상 폭과 동일해야 함
