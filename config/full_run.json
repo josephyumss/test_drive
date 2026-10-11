@@ -1,6 +1,6 @@
 {
   "wheel_diameter_m": 0.2032,
-  "wheel_base_m": 0.85,
+  "wheel_base_m": 0.90,
   "encoder_counts_per_output_rev": 40000,
   "robot_width_m": 0.85,
   "robot_length_m": 0.85,
