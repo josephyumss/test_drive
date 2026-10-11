@@ -19,6 +19,40 @@ from .reactive_avoidance import (
 )
 
 
+def _strip_json_line_comments(text: str) -> str:
+    """Remove // comments while preserving // inside quoted strings."""
+
+    output = []
+    index = 0
+    in_string = False
+    escaped = False
+    while index < len(text):
+        char = text[index]
+        if in_string:
+            output.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            output.append(char)
+            index += 1
+            continue
+        if char == "/" and index + 1 < len(text) and text[index + 1] == "/":
+            index += 2
+            while index < len(text) and text[index] not in "\r\n":
+                index += 1
+            continue
+        output.append(char)
+        index += 1
+    return "".join(output)
+
+
 @dataclass(frozen=True)
 class FullRunConfig:
     wheel_diameter_m: float = 0.2032
@@ -84,7 +118,8 @@ class FullRunConfig:
 
     @classmethod
     def read(cls, path):
-        data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+        text = Path(path).read_text(encoding="utf-8-sig")
+        data = json.loads(_strip_json_line_comments(text))
         unknown = set(data) - {f.name for f in fields(cls)}
         if unknown:
             raise ValueError(f"Unknown configuration keys: {sorted(unknown)}")

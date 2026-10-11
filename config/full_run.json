@@ -1,62 +1,62 @@
 {
-  "wheel_diameter_m": 0.2032,
-  "wheel_base_m": 0.90,
-  "encoder_counts_per_output_rev": 40000,
-  "robot_width_m": 0.85,
-  "robot_length_m": 0.85,
-  "side_safety_margin_m": 0.20,
-  "entry_front_margin_m": 0.20,
-  "rear_safety_margin_m": 0.15,
-  "side_sensor_x_m": 0.0,
-  "side_sensor_y_m": 0.25,
-  "lidar_x_m": 0.0,
-  "lidar_y_m": 0.0,
-  "lidar_yaw_deg": 0.0,
-  "image_width_px": 640,
-  "camera_horizontal_fov_deg": 69.0,
-  "camera_lidar_yaw_offset_deg": 0.0,
-  "minimum_confidence": 0.45,
-  "detection_frames": 3,
-  "minimum_trigger_distance_m": 2.0,
-  "trigger_distance_m": 3.0,
-  "maximum_rpm": 75,
-  "entry_rpm": 36,
-  "bypass_rpm": 48,
-  "return_rpm": 42,
-  "acceleration_rpm_s": 10.0,
-  "deceleration_rpm_s": 75.0,
-  "turn_acceleration_rpm_s": 15.0,
-  "turn_deceleration_rpm_s": 25.0,
-  "avoidance_handle_ratio": 0.30,
-  "avoidance_heading_limit_deg": 80.0,
-  "lookahead_m": 0.25,
-  "path_completion_m": 0.08,
-  "sensor_timeout_s": 1.0,
-  "mcu_timeout_s": 0.5,
-  "startup_timeout_s": 90.0,
-  "front_stop_m": 0.25,
-  "front_resume_m": 0.40,
-  "side_stop_m": 0.20,
-  "side_resume_m": 0.24,
-  "entry_side_clear_m": 0.80,
-  "minimum_entry_forward_m": 0.30,
-  "side_object_max_m": 0.70,
-  "side_clear_min_m": 0.85,
-  "baseline_tolerance_m": 0.10,
-  "baseline_samples": 5,
-  "tail_clear_samples": 5,
-  "tail_min_travel_m": 0.03,
-  "seek_max_distance_m": 3.0,
-  "pass_max_distance_m": 10.0,
-  "path_timeout_s": 120.0,
-  "no_progress_timeout_s": 5.0,
-  "left_trig": 33,
-  "left_echo": 31,
-  "right_trig": 7,
-  "right_echo": 15,
-  "ultrasonic_interval_s": 0.06,
-  "ultrasonic_timeout_s": 0.03,
-  "ultrasonic_max_m": 3.0,
-  "log_max_bytes": 16777216,
-  "log_backup_count": 24
+  "wheel_diameter_m": 0.2032,              // 바퀴 지름(m); 키우면 같은 회전량의 계산 이동거리가 증가
+  "wheel_base_m": 0.90,                    // 좌우 바퀴 간격(m); 키우면 같은 휠 차이의 계산 회전량이 감소
+  "encoder_counts_per_output_rev": 40000,  // 출력축 1회전 엔코더 카운트; 실제 사양과 다르면 주행거리 오차 발생
+  "robot_width_m": 0.85,                   // 로봇 전체 폭(m); 키우면 측면 우회 폭 증가
+  "robot_length_m": 0.85,                  // 로봇 전체 길이(m); 키우면 전후 충돌 판정 범위 증가
+  "side_safety_margin_m": 0.20,            // 차체와 장애물 측면 여유(m); 키우면 더 멀리 우회
+  "entry_front_margin_m": 1.00,            // 장애물 앞 회피 진입 여유(m); 키우면 더 일찍 옆으로 정렬
+  "rear_safety_margin_m": 0.15,            // 장애물 후단 통과 추가 여유(m); 키우면 더 지나간 뒤 복귀
+  "side_sensor_x_m": 0.0,                  // 차체 중심 기준 측면센서 전후 위치(m); +는 전방
+  "side_sensor_y_m": 0.25,                 // 차체 중심 기준 측면센서 좌우 거리(m); 키우면 센서가 차체 끝에 가까움
+  "lidar_x_m": 0.40,                        // 차체 중심 기준 LiDAR 전후 위치(m); +는 전방
+  "lidar_y_m": 0.0,                        // 차체 중심 기준 LiDAR 좌우 위치(m); +는 좌측
+  "lidar_yaw_deg": 0.0,                    // 차체 정면 대비 LiDAR 장착각(도); +는 반시계
+  "image_width_px": 640,                   // YOLO 입력 영상 폭(px); 실제 영상 폭과 동일해야 함
+  "camera_horizontal_fov_deg": 69.0,       // 카메라 수평 화각(도); 키우면 bbox의 환산 각도 증가
+  "camera_lidar_yaw_offset_deg": 0.0,      // 카메라 대비 LiDAR 수평각 보정(도); +는 반시계 보정
+  "minimum_confidence": 0.45,              // YOLO 최소 신뢰도; 키우면 오검출과 검출 수 모두 감소
+  "detection_frames": 3,                   // 연속 검출 확인 프레임 수; 키우면 진입은 느리지만 안정적
+  "minimum_trigger_distance_m": 2.0,       // 저속 회피 감지거리(m); 키우면 저속에서도 일찍 회피
+  "trigger_distance_m": 3.0,               // 최고속도 회피 감지거리(m); 키우면 고속에서 일찍 회피
+  "maximum_rpm": 75,                       // 일반 직진 최고 RPM; 키우면 최고속도 증가(최대 75)
+  "entry_rpm": 36,                         // 회피 진입 최고 RPM; 키우면 진입이 빠르고 급해짐
+  "bypass_rpm": 48,                        // 장애물 측면 통과 최고 RPM; 키우면 통과 속도 증가
+  "return_rpm": 42,                        // 원래 경로 복귀 최고 RPM; 키우면 복귀가 빠르고 급해짐
+  "acceleration_rpm_s": 10.0,              // 일반 가속률(RPM/s); 키우면 더 빨리 가속
+  "deceleration_rpm_s": 75.0,              // 일반 감속률(RPM/s); 키우면 더 급하게 감속
+  "turn_acceleration_rpm_s": 15.0,         // 회피 회전 가속률(RPM/s); 키우면 회전 진입이 급해짐
+  "turn_deceleration_rpm_s": 25.0,         // 회피 회전 감속률(RPM/s); 키우면 회전 종료가 급해짐
+  "avoidance_handle_ratio": 0.30,          // 회피 곡선 제어점 비율; 키우면 곡선이 길고 완만해짐
+  "avoidance_heading_limit_deg": 80.0,     // 회피 중 허용 최대 방향각(도); 키우면 더 크게 꺾을 수 있음
+  "lookahead_m": 0.25,                     // 곡선 추종 전방주시 거리(m); 키우면 완만, 줄이면 민감
+  "path_completion_m": 0.08,               // 경로 도착 인정 거리(m); 키우면 더 일찍 다음 단계 진입
+  "sensor_timeout_s": 1.0,                 // 카메라·LiDAR 무응답 허용시간(s); 키우면 일시 지연에 관대
+  "mcu_timeout_s": 0.5,                    // STM32 상태 무응답 허용시간(s); 키우면 통신 장애 판정 지연
+  "startup_timeout_s": 90.0,               // READY 준비 최대 대기시간(s); 키우면 초기화 지연 허용
+  "front_stop_m": 0.25,                    // 앞 범퍼 정지거리(m); 키우면 더 일찍 정지
+  "front_resume_m": 0.40,                  // 앞 범퍼 재출발거리(m); 키우면 더 많이 비워야 재출발
+  "side_stop_m": 0.20,                     // 측면센서 정지거리(m); 키우면 측면 장애물에 더 민감
+  "side_resume_m": 0.24,                   // 측면센서 재출발거리(m); 키우면 더 많이 떨어져야 재출발
+  "entry_side_clear_m": 0.80,              // 회피 방향 대각선 최소 여유(m); 키우면 회피 방향 선택이 보수적
+  "minimum_entry_forward_m": 0.30,         // 회피 곡선 생성 최소 전진거리(m); 키우면 급한 진입을 더 자주 거부
+  "side_object_max_m": 0.70,               // 측면 장애물로 인정할 최대거리(m); 키우면 먼 물체도 측면 장애물로 인식
+  "side_clear_min_m": 0.85,                // 장애물 후단이 끝났다고 볼 측면거리(m); 키우면 더 확실히 지나가야 복귀
+  "baseline_tolerance_m": 0.10,            // 측면 기준거리 변화 허용폭(m); 키우면 센서 변화에 둔감
+  "baseline_samples": 5,                   // 측면 기준거리 표본 수; 키우면 안정적이나 통과 시작 지연
+  "tail_clear_samples": 5,                 // 장애물 후단 확인 연속 표본 수; 키우면 복귀가 늦지만 안정적
+  "tail_min_travel_m": 0.03,               // 후단 표본 사이 최소 누적 이동거리(m); 키우면 후단 확인거리 증가
+  "seek_max_distance_m": 3.0,              // 측면 장애물 탐색 최대 주행거리(m); 키우면 센서 미검출을 더 오래 허용
+  "pass_max_distance_m": 10.0,             // 측면 통과 최대 주행거리(m); 키우면 긴 장애물 통과 허용
+  "path_timeout_s": 120.0,                 // 회피 경로 최대 수행시간(s); 키우면 느린 회피를 더 오래 허용
+  "no_progress_timeout_s": 5.0,            // 바퀴 진행 없음 허용시간(s); 키우면 고착 판정이 늦어짐
+  "left_trig": 33,                         // 왼쪽 초음파 TRIG 물리핀(BOARD); 배선 변경 시 수정
+  "left_echo": 31,                         // 왼쪽 초음파 ECHO 물리핀(BOARD); 배선 변경 시 수정
+  "right_trig": 7,                         // 오른쪽 초음파 TRIG 물리핀(BOARD); 배선 변경 시 수정
+  "right_echo": 15,                        // 오른쪽 초음파 ECHO 물리핀(BOARD); 배선 변경 시 수정
+  "ultrasonic_interval_s": 0.06,           // 초음파 측정 주기(s); 키우면 측정 빈도 감소·간섭 감소
+  "ultrasonic_timeout_s": 0.03,            // 초음파 에코 대기시간(s); 키우면 먼 거리 에코를 더 오래 대기
+  "ultrasonic_max_m": 3.0,                 // 초음파 유효 최대거리(m); 키우면 먼 에코도 유효 처리
+  "log_max_bytes": 16777216,               // 로그 파일 1개 최대크기(byte); 키우면 파일당 기록량 증가
+  "log_backup_count": 24                   // 보관할 순환 로그 개수; 키우면 디스크 사용량 증가
 }
