@@ -11,11 +11,14 @@ sudo bash scripts/start_full_run.sh --avoidance-mode fixed
 # 다른 터미널: full-run이 실제로 사용하는 전방 LiDAR 값/반사점 실시간 확인
 bash scripts/show_front_lidar.sh
 
+
+
+
+
+
+
 sudo tail -n 120 ~/Projects/test_drive/logs/full_run/latest/controller.log
 
-수동 실행 전용 (systemd 자동 실행 사용 안 함)
-
-기존에 자동 서비스를 설치한 Jetson에서 최초 한 번만 실행
 
 sudo systemctl disable --now amr-full-run.service
 
@@ -27,9 +30,6 @@ git pull --ff-only origin main \
   && sudo bash scripts/start_full_run.sh --check \
   && sudo bash scripts/start_full_run.sh --preflight-only
 
-프로세스 수동 실행
-
-sudo bash scripts/start_full_run.sh
 
 터미널에 [READY]가 표시된 뒤 물리 UP 버튼을 누르면 출발
 
@@ -41,13 +41,9 @@ sudo bash scripts/start_full_run.sh
 sudo tail -F ~/Projects/test_drive/logs/full_run/latest/controller.log
 
 
-혹시 자동 서비스가 다시 실행 중이면 끄기 : sudo systemctl disable --now amr-full-run.service
-
 sudo chown -R "$(id -un):$(id -gn)" .git
 sudo chmod -R u+rwX .git
 
-
-비정상 종료 뒤에도 `sudo bash scripts/start_full_run.sh`를 다시 실행하면 남은 LiDAR·YOLO 자원을 먼저 자동 정리합니다.
 
 =====================================
 
