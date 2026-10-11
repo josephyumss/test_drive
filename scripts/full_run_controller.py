@@ -50,13 +50,12 @@ def parse_scan(message, config, metrics=None):
             x = config.lidar_x_m + distance * math.cos(angle)
             y = config.lidar_y_m + distance * math.sin(angle)
             valid_points += 1
-            # A return inside the configured chassis envelope is the robot
-            # itself, not traversable-space evidence.  Keeping these returns
-            # made side/rear chassis reflections look like obstacles in front
-            # of the bumper.  Do not add a margin here: points immediately
-            # outside the measured footprint remain safety obstacles.
-            if (abs(x) <= config.robot_length_m / 2
-                    and abs(y) <= config.robot_width_m / 2):
+            # A small envelope around the measured chassis absorbs boundary
+            # noise from the bumper/body.  It is deliberately separate from
+            # collision clearances, so stop/resume and avoidance geometry do
+            # not change when self-reflections are filtered.
+            if (abs(x) <= config.robot_length_m / 2 + config.lidar_self_filter_margin_m
+                    and abs(y) <= config.robot_width_m / 2 + config.lidar_self_filter_margin_m):
                 self_filtered_points += 1
                 continue
             robot_angle, robot_range = math.atan2(y, x), math.hypot(x, y)

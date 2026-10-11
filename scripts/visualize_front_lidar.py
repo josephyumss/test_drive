@@ -130,6 +130,8 @@ def format_screen(result, config, sequence, age_s):
         f"raw +/-15deg radial minimum={result['radial_front_m']:.3f}m  "
         f"valid={result['metrics']['valid_points']} self-filtered={result['metrics']['self_filtered_points']} "
         f"retained={result['metrics']['retained_points']}",
+        f"self-filter envelope margin={config.lidar_self_filter_margin_m:.3f}m "
+        f"(does not change stop/resume thresholds)",
         "",
         "TOP VIEW: forward=up, left=screen-left; X=blocking return, #=corridor point, .=other point",
         "          R=robot, L=LiDAR, -=stop line, ==resume line, |=corridor edge",

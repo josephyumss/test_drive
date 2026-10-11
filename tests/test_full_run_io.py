@@ -57,6 +57,16 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(metrics["retained_points"], 1)
         self.assertGreater(front, 1.9)
 
+    def test_small_returns_just_outside_bumper_are_removed_by_self_filter_margin(self):
+        values = [math.inf]*360
+        values[180] = 0.445  # 2cm beyond a 0.85m chassis: boundary self-reflection.
+        values[181] = 0.50   # Beyond the configured 3cm margin: real obstacle evidence.
+        metrics = {}
+        points, _front = adapter.parse_scan(self.scan(values), FullRunConfig(), metrics)
+        self.assertEqual(metrics["self_filtered_points"], 1)
+        self.assertEqual(len(points), 1)
+        self.assertGreater(points[0][1], 0.49)
+
 
 class EchoTests(unittest.TestCase):
     def worker(self, stuck=False, generate=False):

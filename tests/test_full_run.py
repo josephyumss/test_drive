@@ -79,7 +79,7 @@ class FullRunTests(unittest.TestCase):
         self.assertAlmostEqual(self.config.rear_clearance_m, 0.575)
         self.assertEqual(self.config.robot_width_m, 0.85)
         self.assertEqual(self.config.side_safety_margin_m, 0.20)
-        self.assertEqual(self.config.entry_front_margin_m, 1.00)
+        self.assertEqual(self.config.entry_front_margin_m, 0.30)
         self.assertEqual(self.config.side_stop_m, 0.20)
         self.assertEqual(self.config.side_resume_m, 0.24)
         self.assertEqual(self.config.maximum_rpm, 75)
@@ -93,7 +93,7 @@ class FullRunTests(unittest.TestCase):
         self.assertEqual(self.config.avoidance_handle_ratio, 0.30)
         self.assertEqual(self.config.minimum_trigger_distance_m, 2.0)
         self.assertEqual(self.config.trigger_distance_m, 3.0)
-        self.assertEqual(self.config.avoidance_heading_limit_deg, 80.0)
+        self.assertEqual(self.config.avoidance_heading_limit_deg, 50.0)
         self.assertEqual(self.config.minimum_entry_forward_m, 0.30)
 
     def test_config_rejects_overlapping_thresholds_and_duplicate_pins(self):

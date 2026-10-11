@@ -5,13 +5,14 @@
   "robot_width_m": 0.85,                   // 로봇 전체 폭(m); 키우면 측면 우회 폭 증가
   "robot_length_m": 0.85,                  // 로봇 전체 길이(m); 키우면 전후 충돌 판정 범위 증가
   "side_safety_margin_m": 0.20,            // 차체와 장애물 측면 여유(m); 키우면 더 멀리 우회
-  "entry_front_margin_m": 1.00,            // 장애물 앞 회피 진입 여유(m); 키우면 더 일찍 옆으로 정렬
+  "entry_front_margin_m": 0.3,            // 장애물 앞 회피 진입 여유(m); 키우면 더 일찍 옆으로 정렬
   "rear_safety_margin_m": 0.15,            // 장애물 후단 통과 추가 여유(m); 키우면 더 지나간 뒤 복귀
   "side_sensor_x_m": 0.0,                  // 차체 중심 기준 측면센서 전후 위치(m); +는 전방
   "side_sensor_y_m": 0.25,                 // 차체 중심 기준 측면센서 좌우 거리(m); 키우면 센서가 차체 끝에 가까움
   "lidar_x_m": 0.0,                        // 차체 중심 기준 LiDAR 전후 위치(m); +는 전방
   "lidar_y_m": 0.0,                        // 차체 중심 기준 LiDAR 좌우 위치(m); +는 좌측
   "lidar_yaw_deg": 0.0,                    // 차체 정면 대비 LiDAR 장착각(도); +는 반시계
+  "lidar_self_filter_margin_m": 0.03,       // 차체 경계 LiDAR 자기반사 제거 여유(m); 주행 안전거리에는 영향 없음
   "image_width_px": 640,                   // YOLO 입력 영상 폭(px); 실제 영상 폭과 동일해야 함
   "camera_horizontal_fov_deg": 69.0,       // 카메라 수평 화각(도); 키우면 bbox의 환산 각도 증가
   "camera_lidar_yaw_offset_deg": 0.0,      // 카메라 대비 LiDAR 수평각 보정(도); +는 반시계 보정
@@ -28,7 +29,7 @@
   "turn_acceleration_rpm_s": 15.0,         // 회피 회전 가속률(RPM/s); 키우면 회전 진입이 급해짐
   "turn_deceleration_rpm_s": 25.0,         // 회피 회전 감속률(RPM/s); 키우면 회전 종료가 급해짐
   "avoidance_handle_ratio": 0.30,          // 회피 곡선 제어점 비율; 키우면 곡선이 길고 완만해짐
-  "avoidance_heading_limit_deg": 80.0,     // 회피 중 허용 최대 방향각(도); 키우면 더 크게 꺾을 수 있음
+  "avoidance_heading_limit_deg": 50.0,     // 회피 중 허용 최대 방향각(도); 키우면 더 크게 꺾을 수 있음
   "lookahead_m": 0.25,                     // 곡선 추종 전방주시 거리(m); 키우면 완만, 줄이면 민감
   "path_completion_m": 0.08,               // 경로 도착 인정 거리(m); 키우면 더 일찍 다음 단계 진입
   "sensor_timeout_s": 1.0,                 // 카메라·LiDAR 무응답 허용시간(s); 키우면 일시 지연에 관대

@@ -37,6 +37,12 @@ class FrontLidarVisualizerTests(unittest.TestCase):
         self.assertIn("17.5cm", screen)
         self.assertIn("X=blocking return", screen)
 
+    def test_bumper_boundary_self_reflection_is_not_reported_as_blocker(self):
+        result = analyse_scan(self.scan(0.05), self.config)  # robot x = 0.45m
+        self.assertIsNone(result["nearest"])
+        self.assertEqual(result["decision"], "CLEAR")
+        self.assertEqual(result["metrics"]["self_filtered_points"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

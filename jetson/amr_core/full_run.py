@@ -68,6 +68,7 @@ class FullRunConfig:
     lidar_x_m: float = 0.0
     lidar_y_m: float = 0.0
     lidar_yaw_deg: float = 0.0
+    lidar_self_filter_margin_m: float = 0.03
     image_width_px: int = 640
     camera_horizontal_fov_deg: float = 69.0
     camera_lidar_yaw_offset_deg: float = 0.0
@@ -130,7 +131,8 @@ class FullRunConfig:
     def validate(self):
         signed = {"side_sensor_x_m", "lidar_x_m", "lidar_y_m", "lidar_yaw_deg",
                   "camera_lidar_yaw_offset_deg"}
-        zero_allowed = {"side_safety_margin_m", "rear_safety_margin_m"}
+        zero_allowed = {"side_safety_margin_m", "rear_safety_margin_m",
+                        "lidar_self_filter_margin_m"}
         for key, value in asdict(self).items():
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
                 raise ValueError(f"{key}: finite numeric value required")
