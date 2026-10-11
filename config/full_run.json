@@ -18,8 +18,8 @@
   "camera_lidar_yaw_offset_deg": 0.0,      // 카메라 대비 LiDAR 수평각 보정(도); +는 반시계 보정
   "minimum_confidence": 0.45,              // YOLO 최소 신뢰도; 키우면 오검출과 검출 수 모두 감소
   "detection_frames": 3,                   // 연속 검출 확인 프레임 수; 키우면 진입은 느리지만 안정적
-  "minimum_trigger_distance_m": 3.0,       // 저속 회피 감지거리(m); 키우면 저속에서도 일찍 회피
-  "trigger_distance_m": 3.0,               // 최고속도 회피 감지거리(m); 키우면 고속에서 일찍 회피
+  "minimum_trigger_distance_m": 1.1,       // 저속 회피 감지거리(m); 키우면 저속에서도 일찍 회피
+  "trigger_distance_m": 2.0,               // 최고속도 회피 감지거리(m); 키우면 고속에서 일찍 회피
   "maximum_rpm": 75,                       // 일반 직진 최고 RPM; 키우면 최고속도 증가(최대 75)
   "entry_rpm": 36,                         // 회피 진입 최고 RPM; 키우면 진입이 빠르고 급해짐
   "bypass_rpm": 48,                        // 장애물 측면 통과 최고 RPM; 키우면 통과 속도 증가
