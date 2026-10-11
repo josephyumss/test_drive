@@ -75,9 +75,13 @@ class FullRunTests(unittest.TestCase):
             self.step()
 
     def test_configuration_geometry(self):
-        self.assertAlmostEqual(self.config.expected_side_range_m, 0.40)
+        self.assertAlmostEqual(self.config.expected_side_range_m, 0.275)
         self.assertAlmostEqual(self.config.rear_clearance_m, 0.575)
-        self.assertEqual(self.config.side_safety_margin_m, 0.20)
+        self.assertEqual(self.config.robot_width_m, 0.85)
+        self.assertEqual(self.config.side_safety_margin_m, 0.10)
+        self.assertEqual(self.config.entry_front_margin_m, 0.20)
+        self.assertEqual(self.config.side_stop_m, 0.20)
+        self.assertEqual(self.config.side_resume_m, 0.24)
         self.assertEqual(self.config.maximum_rpm, 75)
         self.assertEqual(self.config.entry_rpm, 36)
         self.assertEqual(self.config.bypass_rpm, 48)
@@ -184,7 +188,7 @@ class FullRunTests(unittest.TestCase):
         self.start()
         self.core.target = self.target()
         obstacle_x = (self.config.robot_length_m / 2
-                      + self.config.side_safety_margin_m + 0.31)
+                      + self.config.entry_front_margin_m + 0.31)
         self.core.target_world = (obstacle_x, 0.0)
         self.core.choose_entry()
         self.assertEqual(self.core.state, "PAUSED")
@@ -194,7 +198,7 @@ class FullRunTests(unittest.TestCase):
         self.start()
         self.core.target = self.target()
         obstacle_x = (self.config.robot_length_m / 2
-                      + self.config.side_safety_margin_m + 1.30)
+                      + self.config.entry_front_margin_m + 1.30)
         self.core.target_world = (obstacle_x, 0.0)
         self.core.choose_entry()
         self.assertEqual(self.core.state, "RUNNING")
@@ -213,7 +217,7 @@ class FullRunTests(unittest.TestCase):
         self.start()
         self.core.target = self.target()
         obstacle_x = (self.config.robot_length_m / 2
-                      + self.config.side_safety_margin_m + 0.29)
+                      + self.config.entry_front_margin_m + 0.29)
         self.core.target_world = (obstacle_x, 0.0)
         self.core.choose_entry()
         self.assertEqual(self.core.state, "PAUSED")

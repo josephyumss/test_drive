@@ -250,7 +250,7 @@ class SetupWorkerTests(unittest.TestCase):
         result = self.run_worker("configuration")
         self.assertEqual(result.returncode, 0, result.stdout)
         config = json.loads(result.stdout)
-        self.assertEqual(config["configuration"]["robot_width_m"], 0.9)
+        self.assertEqual(config["configuration"]["robot_width_m"], 0.85)
         self.assertFalse((self.folder / "config-check").exists())
 
     def test_existing_apt_packages_do_not_run_apt_update_or_install(self):

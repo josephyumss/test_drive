@@ -24,9 +24,10 @@ class FullRunConfig:
     wheel_diameter_m: float = 0.2032
     wheel_base_m: float = 0.85
     encoder_counts_per_output_rev: int = 40000
-    robot_width_m: float = 0.90
+    robot_width_m: float = 0.85
     robot_length_m: float = 0.85
-    side_safety_margin_m: float = 0.20
+    side_safety_margin_m: float = 0.10
+    entry_front_margin_m: float = 0.20
     rear_safety_margin_m: float = 0.15
     side_sensor_x_m: float = 0.0
     side_sensor_y_m: float = 0.25
@@ -57,8 +58,8 @@ class FullRunConfig:
     startup_timeout_s: float = 90.0
     front_stop_m: float = 0.25
     front_resume_m: float = 0.40
-    side_stop_m: float = 0.30
-    side_resume_m: float = 0.36
+    side_stop_m: float = 0.20
+    side_resume_m: float = 0.24
     entry_side_clear_m: float = 0.80
     minimum_entry_forward_m: float = 0.30
     side_object_max_m: float = 0.70
@@ -446,7 +447,7 @@ class FullRunController:
         # +/-15deg radial sector alone misses the corners of a 90cm chassis.
         values = [d * math.cos(a) - self.c.robot_length_m / 2
                   for a, d in self.points if d * math.cos(a) > 0.01
-                  and abs(d * math.sin(a)) <= self.c.robot_width_m / 2 + self.c.rear_safety_margin_m]
+                  and abs(d * math.sin(a)) <= self.c.robot_width_m / 2 + self.c.side_safety_margin_m]
         return min(values, default=(self.front - self.c.robot_length_m / 2) if self.front is not None else -math.inf)
 
     def current_speed_rpm(self):
@@ -529,7 +530,7 @@ class FullRunController:
         # The frozen obstacle position, not a fresh detection, survives pauses.
         obstacle_local_x = ((self.target_world[0] - self.odom.x_m) * math.cos(self.odom.yaw_rad)
                             + (self.target_world[1] - self.odom.y_m) * math.sin(self.odom.yaw_rad))
-        forward = obstacle_local_x - self.c.robot_length_m / 2 - self.c.side_safety_margin_m
+        forward = obstacle_local_x - self.c.robot_length_m / 2 - self.c.entry_front_margin_m
         if forward < self.c.minimum_entry_forward_m:
             self.pause("insufficient_entry_forward_room")
             return
@@ -776,7 +777,7 @@ class FullRunController:
     def snapshot(self, now):
         corridor = [(d * math.cos(a), d * math.sin(a)) for a, d in self.points
                     if d * math.cos(a) > 0.01
-                    and abs(d * math.sin(a)) <= self.c.robot_width_m / 2 + self.c.rear_safety_margin_m]
+                    and abs(d * math.sin(a)) <= self.c.robot_width_m / 2 + self.c.side_safety_margin_m]
         nearest = min(corridor, default=None, key=lambda point: point[0])
         return {"state": self.state, "phase": self.phase, "reason": self.reason,
                 "mcu_protocol": self.mcu_protocol,
