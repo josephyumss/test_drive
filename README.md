@@ -2,6 +2,9 @@
 git pull --ff-only origin main
 sudo bash scripts/start_full_run.sh
 
+# 다른 터미널: full-run이 실제로 사용하는 전방 LiDAR 값/반사점 실시간 확인
+bash scripts/show_front_lidar.sh
+
 sudo tail -n 120 ~/Projects/test_drive/logs/full_run/latest/controller.log
 
 수동 실행 전용 (systemd 자동 실행 사용 안 함)
