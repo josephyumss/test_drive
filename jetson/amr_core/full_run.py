@@ -733,6 +733,33 @@ class FullRunController:
                       lidar_m=lidar, tail_at=self.tail_at, extra_m=self.c.rear_clearance_m)
             self.set_phase("REAR_CLEARANCE")
 
+    def dynamic_side_evidence(self):
+        """Confirm the tail after one body length using the inside ultrasonic."""
+        reading = self.sides[self.inside]
+        if reading.stamp <= self.last_side_stamp:
+            return
+        self.last_side_stamp = reading.stamp
+        travelled = self.odom.distance_travelled_m - self.pass_start
+        if travelled < self.c.robot_length_m:
+            self.clear_count = 0
+            return
+        # LiDAR remains a close-collision guard in blocking_reason(), but is
+        # intentionally not a dynamic tail gate: chassis reflections or
+        # nearby furniture must not make PASS continue indefinitely.
+        clear = (reading.status == "NO_ECHO"
+                 or (reading.status == "VALID"
+                     and reading.distance_m >= self.c.side_clear_min_m))
+        self.clear_count = self.clear_count + 1 if clear else 0
+        if self.clear_count >= self.c.tail_clear_samples:
+            self.tail_at = self.odom.distance_travelled_m
+            self.tail_x_m = self.odom.x_m
+            self.emit("tail_confirmed", side=self.inside,
+                      range_m=reading.distance_m, lidar_m=self.lateral_clearance(self.inside),
+                      tail_at=self.tail_at, extra_m=self.c.rear_clearance_m,
+                      policy="dynamic_body_length_then_ultrasonic",
+                      minimum_pass_m=self.c.robot_length_m)
+            self.set_phase("REAR_CLEARANCE")
+
     def update_phase(self):
         if self.phase == "DRIVE":
             target = self.new_target()
@@ -748,17 +775,30 @@ class FullRunController:
             elif self.follower.completed(pose_x_m=self.odom.x_m, pose_y_m=self.odom.y_m,
                                          pose_yaw_rad=self.odom.yaw_rad):
                 if self.phase == "ENTRY":
-                    self.set_phase("BASELINE")
+                    if self.avoidance_mode == "dynamic":
+                        self.pass_start = self.odom.distance_travelled_m
+                        self.clear_count = 0
+                        self.last_side_stamp = -math.inf
+                        self.emit("dynamic_pass_started", minimum_pass_m=self.c.robot_length_m,
+                                  clear_threshold_m=self.c.side_clear_min_m,
+                                  clear_samples=self.c.tail_clear_samples)
+                        self.set_phase("PASS")
+                    else:
+                        self.set_phase("BASELINE")
                 else:
                     self.target = self.target_world = self.follower = None
                     self.side_seen = False
                     self.set_phase("DRIVE")
         elif self.phase in ("BASELINE", "PASS", "REAR_CLEARANCE"):
             if self.phase != "BASELINE" or max(abs(value) for value in self.ramped) < 0.5:
-                self.side_evidence()
+                if self.avoidance_mode == "dynamic" and self.phase == "PASS":
+                    self.dynamic_side_evidence()
+                else:
+                    self.side_evidence()
             if self.phase == "PASS":
                 distance = self.odom.distance_travelled_m - self.pass_start
-                if not self.side_seen and distance > self.c.seek_max_distance_m:
+                if (self.avoidance_mode != "dynamic" and not self.side_seen
+                        and distance > self.c.seek_max_distance_m):
                     self.fault("side_obstacle_never_seen_check_sensor_source_wiring_orientation")
                 elif distance > self.c.pass_max_distance_m:
                     self.pause("pass_distance_limit")
@@ -767,12 +807,17 @@ class FullRunController:
                 # A second close face cancels clearance; concave/segmented
                 # obstacles must not trigger an early return.
                 r = self.sides[self.inside]
-                if ((r.status == "VALID" and r.distance_m <= self.c.side_object_max_m)
-                        or self.lateral_clearance(self.inside) <= self.c.side_object_max_m):
+                close_again = (r.status == "VALID" and r.distance_m <= self.c.side_object_max_m)
+                if self.avoidance_mode != "dynamic":
+                    close_again = (close_again
+                                   or self.lateral_clearance(self.inside) <= self.c.side_object_max_m)
+                if close_again:
                     self.tail_at = None
                     self.clear_count = 0
                     self.set_phase("PASS")
-                elif self.odom.x_m - self.tail_x_m >= self.c.rear_clearance_m:
+                elif ((self.odom.distance_travelled_m - self.tail_at >= self.c.rear_clearance_m)
+                      if self.avoidance_mode == "dynamic"
+                      else (self.odom.x_m - self.tail_x_m >= self.c.rear_clearance_m)):
                     self.set_phase("RETURN")
                     self.make_path(self.odom.x_m + max(1.0, abs(self.odom.y_m) * 2), 0.0)
         if self.phase in ("ENTRY", "BASELINE", "PASS", "REAR_CLEARANCE", "RETURN"):

@@ -75,11 +75,11 @@ class FullRunTests(unittest.TestCase):
             self.step()
 
     def test_configuration_geometry(self):
-        self.assertAlmostEqual(self.config.expected_side_range_m, 0.375)
+        self.assertAlmostEqual(self.config.expected_side_range_m, 0.25)
         self.assertAlmostEqual(self.config.rear_clearance_m, 0.575)
-        self.assertEqual(self.config.robot_width_m, 0.85)
-        self.assertEqual(self.config.side_safety_margin_m, 0.20)
-        self.assertEqual(self.config.entry_front_margin_m, 0.30)
+        self.assertEqual(self.config.robot_width_m, 0.80)
+        self.assertEqual(self.config.side_safety_margin_m, 0.10)
+        self.assertEqual(self.config.entry_front_margin_m, 0.10)
         self.assertEqual(self.config.side_stop_m, 0.20)
         self.assertEqual(self.config.side_resume_m, 0.24)
         self.assertEqual(self.config.maximum_rpm, 75)
@@ -91,10 +91,10 @@ class FullRunTests(unittest.TestCase):
         self.assertEqual(self.config.turn_acceleration_rpm_s, 15.0)
         self.assertEqual(self.config.turn_deceleration_rpm_s, 25.0)
         self.assertEqual(self.config.avoidance_handle_ratio, 0.40)
-        self.assertEqual(self.config.minimum_trigger_distance_m, 3.0)
-        self.assertEqual(self.config.trigger_distance_m, 3.0)
+        self.assertEqual(self.config.minimum_trigger_distance_m, 1.1)
+        self.assertEqual(self.config.trigger_distance_m, 2.0)
         self.assertEqual(self.config.avoidance_heading_limit_deg, 80.0)
-        self.assertEqual(self.config.dynamic_entry_heading_deg, 35.0)
+        self.assertEqual(self.config.dynamic_entry_heading_deg, 60.0)
         self.assertEqual(self.config.dynamic_curve_buffer_m, 0.10)
         self.assertEqual(self.config.dynamic_max_trigger_distance_m, 4.0)
         self.assertEqual(self.config.minimum_entry_forward_m, 0.30)
@@ -132,17 +132,19 @@ class FullRunTests(unittest.TestCase):
         self.assertEqual(self.core.ramp_command((0, 0), 0.5), (38, 38))
         self.assertEqual(self.core.ramp_command((0, 0), 0.5), (0, 0))
 
-    def test_fixed_detection_range_stays_at_configured_three_metres(self):
+    def test_fixed_detection_range_scales_from_configured_minimum_to_maximum(self):
         self.core.ramped = [0.0, 0.0]
-        self.assertAlmostEqual(self.core.current_trigger_distance_m(), 3.0)
+        self.assertAlmostEqual(self.core.current_trigger_distance_m(), 1.1)
         self.core.ramped = [37.5, 37.5]
-        self.assertAlmostEqual(self.core.current_trigger_distance_m(), 3.0)
+        self.assertAlmostEqual(self.core.current_trigger_distance_m(), 1.55)
         self.core.ramped = [75.0, 75.0]
-        self.assertAlmostEqual(self.core.current_trigger_distance_m(), 3.0)
+        self.assertAlmostEqual(self.core.current_trigger_distance_m(), 2.0)
 
-        distant = self.target(distance=2.7)
+        distant = self.target(distance=1.8)
         self.core.objects = [distant]
         self.core.ramped = [0.0, 0.0]
+        self.assertIsNone(self.core.new_target())
+        self.core.ramped = [75.0, 75.0]
         self.assertEqual(self.core.new_target(), distant)
 
     def test_dynamic_trigger_starts_earlier_for_wider_obstacle(self):
@@ -176,7 +178,7 @@ class FullRunTests(unittest.TestCase):
                              -0.70, 0.70, True)
         self.core.ramped = [0.0, 0.0]
         self.assertEqual(self.core.avoidance_mode, "fixed")
-        self.assertAlmostEqual(self.core.target_trigger_distance_m(target), 3.0)
+        self.assertAlmostEqual(self.core.target_trigger_distance_m(target), 1.1)
 
     def test_phase_speed_limits_scale_with_75_rpm_drive_limit(self):
         self.start()
@@ -531,6 +533,63 @@ class FullRunTests(unittest.TestCase):
             self.step(points=[(-math.pi / 2, 0.70)])
         self.assertEqual(self.core.phase, "PASS")
         self.assertIsNone(self.core.tail_at)
+
+    def test_dynamic_entry_skips_baseline_stop_and_starts_pass(self):
+        self.start()
+        self.core.avoidance_mode = "dynamic"
+        self.core.target = self.target()
+        self.core.target_world = (1.95, 0.0)
+        self.core.turn_left = True
+        self.core.lane_y = 0.775
+        self.core.set_phase("ENTRY")
+        self.core.make_path(1.0, self.core.lane_y)
+        self.core.odom.x_m = 1.0
+        self.core.odom.y_m = self.core.lane_y
+        self.core.ramped = [5.0, 5.0]
+        command = self.step(right=1.0)
+        self.assertEqual(self.core.phase, "PASS")
+        self.assertNotEqual(command, (0, 0))
+
+    def test_dynamic_pass_waits_one_body_length_then_five_clear_samples(self):
+        self.start()
+        self.core.avoidance_mode = "dynamic"
+        self.core.turn_left = True
+        self.core.lane_y = 0.775
+        self.core.set_phase("PASS")
+        self.core.pass_start = self.core.odom.distance_travelled_m
+
+        self.core.odom.distance_travelled_m += self.config.robot_length_m - 0.01
+        for _ in range(self.config.tail_clear_samples + 2):
+            self.step(right=None)
+        self.assertEqual(self.core.phase, "PASS")
+        self.assertEqual(self.core.clear_count, 0)
+
+        self.core.odom.distance_travelled_m += 0.02
+        for _ in range(self.config.tail_clear_samples - 1):
+            self.step(right=None)
+        self.assertEqual(self.core.phase, "PASS")
+        self.assertEqual(self.core.clear_count, self.config.tail_clear_samples - 1)
+        self.step(right=None)
+        self.assertEqual(self.core.phase, "REAR_CLEARANCE")
+
+    def test_dynamic_rear_clearance_uses_travel_from_side_sensor_tail(self):
+        self.start()
+        self.core.avoidance_mode = "dynamic"
+        self.core.turn_left = True
+        self.core.lane_y = 0.775
+        self.core.set_phase("PASS")
+        self.core.pass_start = self.core.odom.distance_travelled_m
+        self.core.odom.distance_travelled_m += self.config.robot_length_m
+        for _ in range(self.config.tail_clear_samples):
+            self.step(right=1.0)
+        self.assertEqual(self.core.phase, "REAR_CLEARANCE")
+
+        self.core.odom.distance_travelled_m += self.config.rear_clearance_m - 0.01
+        self.step(right=1.0)
+        self.assertEqual(self.core.phase, "REAR_CLEARANCE")
+        self.core.odom.distance_travelled_m += 0.02
+        self.step(right=1.0)
+        self.assertEqual(self.core.phase, "RETURN")
 
     def test_paused_samples_cannot_advance_tail_or_reset_path(self):
         self.passing()

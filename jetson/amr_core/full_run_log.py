@@ -146,6 +146,11 @@ class FlightRecorder:
                   f"진입 전진거리 {data.get('actual_entry_forward_m', '?')}m, "
                   f"최대 예상각 {data.get('actual_peak_heading_deg', '?')}도", flush=True)
             return
+        if event == "dynamic_pass_started":
+            print(f"[AVOID] 정렬 완료: 차체 길이 {data.get('minimum_pass_m', '?')}m 전진 후 "
+                  f"측면 {data.get('clear_threshold_m', '?')}m 이상을 "
+                  f"{data.get('clear_samples', '?')}회 확인합니다.", flush=True)
+            return
         if event == "side_object_seen":
             print(f"[AVOID] {data.get('side', '?')} 측면센서로 장애물 확인", flush=True)
             return
