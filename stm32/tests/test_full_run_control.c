@@ -10,17 +10,19 @@ int main(void)
     assert(s.base_rpm == 5 && s.up_count == 1 && FullRun_Allowed(&s));
     FullRun_Begin(&s, 123); /* a repeated handshake cannot reset a live run */
     assert(s.base_rpm == 5);
-    for (int i = 0; i < 10; ++i) FullRun_ButtonTick(&s, 110, 1, 0, 0);
-    assert(s.base_rpm == 25);
+    for (int i = 0; i < 20; ++i) FullRun_ButtonTick(&s, 110, 1, 0, 0);
+    assert(s.base_rpm == 75 && s.up_count == 21);
+    FullRun_ButtonTick(&s, 115, 1, 0, 0);
+    assert(s.base_rpm == 75 && s.up_count == 22); /* event remains observable at cap */
     FullRun_ButtonTick(&s, 200, 0, 1, 0);
-    assert(s.base_rpm == 20 && s.down_count == 1);
+    assert(s.base_rpm == 70 && s.down_count == 1);
     FullRun_ButtonTick(&s, 300, 0, 0, 1);
     FullRun_ButtonTick(&s, 1100, 0, 0, 1);
     assert(s.instant_stop && s.stop_count == 1 && !FullRun_Allowed(&s));
     FullRun_ButtonTick(&s, 1200, 1, 0, 1); /* held stop wins */
     assert(s.instant_stop);
     FullRun_ButtonTick(&s, 1300, 1, 0, 0);
-    assert(!s.instant_stop && s.base_rpm == 20 && FullRun_Allowed(&s));
+    assert(!s.instant_stop && s.base_rpm == 70 && FullRun_Allowed(&s));
     FullRun_InstantStop(&s);
     s.fault = 1;
     FullRun_ButtonTick(&s, 1400, 1, 0, 0);

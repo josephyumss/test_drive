@@ -703,9 +703,9 @@ int main(void)
                             left_cmd = 0;
                         }
 
-                        if (left_cmd > 65)
+                        if (left_cmd > 75)
                         {
-                            left_cmd = 65;
+                            left_cmd = 75;
                         }
 
 
@@ -714,9 +714,9 @@ int main(void)
                             right_cmd = 0;
                         }
 
-                        if (right_cmd > 65)
+                        if (right_cmd > 75)
                         {
-                            right_cmd = 65;
+                            right_cmd = 75;
                         }
 
 
@@ -877,10 +877,10 @@ int main(void)
 
 
             if (base_target_rpm >
-                65.0f)
+                75.0f)
             {
                 base_target_rpm =
-                    65.0f;
+                    75.0f;
             }
         }
 

@@ -91,8 +91,8 @@ class FullRunTests(unittest.TestCase):
         self.assertEqual(self.config.turn_acceleration_rpm_s, 15.0)
         self.assertEqual(self.config.turn_deceleration_rpm_s, 25.0)
         self.assertEqual(self.config.avoidance_handle_ratio, 0.40)
-        self.assertEqual(self.config.minimum_trigger_distance_m, 1.1)
-        self.assertEqual(self.config.trigger_distance_m, 2.0)
+        self.assertEqual(self.config.minimum_trigger_distance_m, 1.6)
+        self.assertEqual(self.config.trigger_distance_m, 2.5)
         self.assertEqual(self.config.avoidance_heading_limit_deg, 80.0)
         self.assertEqual(self.config.dynamic_entry_heading_deg, 60.0)
         self.assertEqual(self.config.dynamic_curve_buffer_m, 0.10)
@@ -134,11 +134,11 @@ class FullRunTests(unittest.TestCase):
 
     def test_fixed_detection_range_scales_from_configured_minimum_to_maximum(self):
         self.core.ramped = [0.0, 0.0]
-        self.assertAlmostEqual(self.core.current_trigger_distance_m(), 1.1)
+        self.assertAlmostEqual(self.core.current_trigger_distance_m(), 1.6)
         self.core.ramped = [37.5, 37.5]
-        self.assertAlmostEqual(self.core.current_trigger_distance_m(), 1.55)
+        self.assertAlmostEqual(self.core.current_trigger_distance_m(), 2.05)
         self.core.ramped = [75.0, 75.0]
-        self.assertAlmostEqual(self.core.current_trigger_distance_m(), 2.0)
+        self.assertAlmostEqual(self.core.current_trigger_distance_m(), 2.5)
 
         distant = self.target(distance=1.8)
         self.core.objects = [distant]
@@ -178,7 +178,7 @@ class FullRunTests(unittest.TestCase):
                              -0.70, 0.70, True)
         self.core.ramped = [0.0, 0.0]
         self.assertEqual(self.core.avoidance_mode, "fixed")
-        self.assertAlmostEqual(self.core.target_trigger_distance_m(target), 1.1)
+        self.assertAlmostEqual(self.core.target_trigger_distance_m(target), 1.6)
 
     def test_phase_speed_limits_scale_with_75_rpm_drive_limit(self):
         self.start()
@@ -570,9 +570,9 @@ class FullRunTests(unittest.TestCase):
         self.assertEqual(self.core.phase, "PASS")
         self.assertEqual(self.core.clear_count, self.config.tail_clear_samples - 1)
         self.step(right=None)
-        self.assertEqual(self.core.phase, "REAR_CLEARANCE")
+        self.assertEqual(self.core.phase, "RETURN")
 
-    def test_dynamic_rear_clearance_uses_travel_from_side_sensor_tail(self):
+    def test_dynamic_clear_side_starts_return_without_extra_rear_travel(self):
         self.start()
         self.core.avoidance_mode = "dynamic"
         self.core.turn_left = True
@@ -582,14 +582,8 @@ class FullRunTests(unittest.TestCase):
         self.core.odom.distance_travelled_m += self.config.robot_length_m
         for _ in range(self.config.tail_clear_samples):
             self.step(right=1.0)
-        self.assertEqual(self.core.phase, "REAR_CLEARANCE")
-
-        self.core.odom.distance_travelled_m += self.config.rear_clearance_m - 0.01
-        self.step(right=1.0)
-        self.assertEqual(self.core.phase, "REAR_CLEARANCE")
-        self.core.odom.distance_travelled_m += 0.02
-        self.step(right=1.0)
         self.assertEqual(self.core.phase, "RETURN")
+        self.assertIsNotNone(self.core.follower)
 
     def test_paused_samples_cannot_advance_tail_or_reset_path(self):
         self.passing()
@@ -691,8 +685,10 @@ class ProtocolAndLogTests(unittest.TestCase):
         self.assertEqual(status.right_rpm, 9)
         counted = ControlStatus.decode("$CTRL,1,123,10,2,1,0,0,0,8,9,123456,1000,2000")
         self.assertEqual(counted.left_counts, 1000)
+        self.assertEqual(ControlStatus.decode(
+            "$CTRL,1,123,75,2,1,0,0,0,8,9,123456").base_rpm, 75)
         for line in ("$STATUS,0,0,0,0,0,0,0,0,0,0", "$CTRL,2,123", "$CTRL,1,0,10,2,1,0,0,0,8,9,123456",
-                     "$CTRL,1,123,65,2,1,0,0,0,8,9,123456"):
+                     "$CTRL,1,123,76,2,1,0,0,0,8,9,123456"):
             with self.assertRaises(ValueError):
                 ControlStatus.decode(line)
 

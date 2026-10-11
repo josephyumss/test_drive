@@ -209,7 +209,7 @@ class ControlStatus:
             raise ValueError("Expected $CTRL version 1, 12/14 fields; use legacy mode for existing $STATUS firmware")
         vals = [int(v) for v in parts[2:]]
         s = cls(*vals)
-        if (not 1 <= s.session <= 0x7fffffff or not 0 <= s.base_rpm <= 25
+        if (not 1 <= s.session <= 0x7fffffff or not 0 <= s.base_rpm <= 75
                 or not 0 <= s.stop_flags <= 3 or s.fault not in (0, 1, 2)
                 or any(not 0 <= v <= 0xffffffff for v in
                        (s.up_count, s.down_count, s.stop_count, s.uptime_ms))
@@ -755,10 +755,15 @@ class FullRunController:
             self.tail_x_m = self.odom.x_m
             self.emit("tail_confirmed", side=self.inside,
                       range_m=reading.distance_m, lidar_m=self.lateral_clearance(self.inside),
-                      tail_at=self.tail_at, extra_m=self.c.rear_clearance_m,
-                      policy="dynamic_body_length_then_ultrasonic",
+                      tail_at=self.tail_at, extra_m=0.0,
+                      policy="dynamic_body_length_then_ultrasonic_immediate_return",
                       minimum_pass_m=self.c.robot_length_m)
-            self.set_phase("REAR_CLEARANCE")
+            # Dynamic mode already waits one full chassis length before it
+            # trusts the inside ultrasonic. Once that sensor is consistently
+            # clear, begin the return immediately; do not add another rear
+            # half-length clearance segment.
+            self.set_phase("RETURN")
+            self.make_path(self.odom.x_m + max(1.0, abs(self.odom.y_m) * 2), 0.0)
 
     def update_phase(self):
         if self.phase == "DRIVE":

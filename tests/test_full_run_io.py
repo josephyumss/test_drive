@@ -435,7 +435,7 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(result, 0, records)
         states = [r["after"] for r in records if r["event"] == "state"]
         self.assertEqual(states[:4], ["READY", "RUNNING", "PAUSED", "RUNNING"])
-        self.assertTrue(any(r["event"] == "legacy_status_normalized" and r["base_delta"] == 5 and r["selected_rpm"] == 10 for r in records))
+        self.assertTrue(any(r["event"] == "legacy_status_normalized" and r["base_delta"] == 5 and r["selected_rpm"] == 5 for r in records))
         paused_tx = [r["text"] for r in records if r["event"] == "uart_tx" and r.get("state") == "PAUSED"]
         self.assertTrue(paused_tx)
         self.assertTrue(all(text.startswith("$CMD,0,0,") for text in paused_tx))

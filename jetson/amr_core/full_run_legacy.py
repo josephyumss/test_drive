@@ -160,8 +160,11 @@ class LegacyControlAdapter:
                       instruction="Stop barrier established. A later UP can resume.",
                       wheel_target_feedback=raw.field_count == 11, MCU_command_ACK=False)
         if delta > 0:
-            steps = delta // 5
-            self.up_count += steps
+            # Legacy STATUS exposes the STM32-selected value, not an explicit
+            # button counter. Treat one observed upward transition as one UP
+            # event regardless of the numeric jump; the Jetson owns the
+            # actual selected speed and changes it by exactly one 5-RPM step.
+            self.up_count += 1
             if not allow_controls:
                 self.emit("legacy_startup_button_consumed", direction="UP", base_delta=delta)
             elif stop_barrier:
@@ -176,12 +179,13 @@ class LegacyControlAdapter:
                         self.selected_rpm = 5
                 # The first UP resumes saved speed, rather than increasing it.
             else:
-                self.selected_rpm = min(self.maximum_rpm, self.selected_rpm + steps * 5)
+                self.selected_rpm = min(self.maximum_rpm, self.selected_rpm + 5)
         elif delta < 0:
-            steps = -delta // 5
-            self.down_count += steps
+            # The received value is only direction evidence. It is never
+            # copied into the commanded speed or used as a step count.
+            self.down_count += 1
             if allow_controls:
-                self.selected_rpm = max(0, self.selected_rpm - steps * 5)
+                self.selected_rpm = max(0, self.selected_rpm - 5)
             else:
                 self.emit("legacy_startup_button_consumed", direction="DOWN", base_delta=delta)
         if raw.emergency is True and not self.previous_emergency:
@@ -195,7 +199,8 @@ class LegacyControlAdapter:
         if raw.base_rpm >= 80 and (self.last_limit_warning is None or now - self.last_limit_warning >= 5):
             self.last_limit_warning = now
             self.emit("legacy_button_limit", raw_base_rpm=raw.base_rpm,
-                      instruction="If UP produces no STATUS change, press DOWN once, then UP to restart.")
+                      instruction="Legacy STM32 value is saturated; an unchanged value cannot reveal another UP. "
+                                  "Flash event-counter firmware to remove this hardware/protocol limit.")
         self.emit("legacy_status_normalized", raw=asdict(raw), selected_rpm=self.selected_rpm,
                   base_delta=delta, inferred_up_count=self.up_count, inferred_down_count=self.down_count,
                   software_stop=self.software_stop, odometry="reported_RPM_integral",

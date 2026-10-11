@@ -60,7 +60,7 @@ static inline void FullRun_ButtonTick(volatile FullRunControl *s, uint32_t now,
         if (s->instant_stop) {
             s->instant_stop = 0;
             if (s->base_rpm == 0) s->base_rpm = 5;
-        } else if (s->base_rpm < 25) {
+        } else if (s->base_rpm < 75) {
             s->base_rpm += 5;
         }
     }

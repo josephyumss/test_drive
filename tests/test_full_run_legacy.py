@@ -47,25 +47,25 @@ class LegacyAdapterTests(unittest.TestCase):
     def test_base_changes_infer_UP_and_DOWN_without_new_protocol(self):
         self.feed()
         up = self.feed(15)
-        self.assertEqual((up.base_rpm, up.up_count), (15, 3))
+        self.assertEqual((up.base_rpm, up.up_count), (5, 1))
         down = self.feed(5)
-        self.assertEqual((down.base_rpm, down.down_count), (5, 2))
-        self.assertEqual(self.feed(5).up_count, 3)
+        self.assertEqual((down.base_rpm, down.down_count), (0, 1))
+        self.assertEqual(self.feed(5).up_count, 1)
         self.assertEqual(self.feed(0).base_rpm, 0)
 
-    def test_software_limit_does_not_require_many_DOWN_presses(self):
+    def test_received_value_magnitude_never_becomes_speed_step_count(self):
         self.feed()
-        self.assertEqual(self.feed(60).base_rpm, 25)
-        self.assertEqual(self.feed(55).base_rpm, 20)
+        self.assertEqual(self.feed(60).base_rpm, 5)
+        self.assertEqual(self.feed(55).base_rpm, 0)
 
     def test_stop_preserves_speed_and_first_UP_restores_it(self):
         self.feed()
         self.feed(10)
         self.adapter.request_instant_stop()
         stopped = self.feed(10)
-        self.assertEqual((stopped.base_rpm, stopped.stop_flags, stopped.stop_count), (10, 2, 1))
+        self.assertEqual((stopped.base_rpm, stopped.stop_flags, stopped.stop_count), (5, 2, 1))
         resumed = self.feed(15)
-        self.assertEqual((resumed.base_rpm, resumed.stop_flags), (10, 0))
+        self.assertEqual((resumed.base_rpm, resumed.stop_flags), (5, 0))
 
     def test_UP_in_first_stop_acknowledgement_is_consumed_not_resumed(self):
         self.feed()
@@ -75,7 +75,7 @@ class LegacyAdapterTests(unittest.TestCase):
         self.assertFalse(self.adapter.await_zero_command)
         self.assertEqual(self.feed(15).stop_flags, 2)
         resumed = self.feed(20)
-        self.assertEqual((resumed.base_rpm, resumed.stop_flags), (10, 0))
+        self.assertEqual((resumed.base_rpm, resumed.stop_flags), (5, 0))
 
     def test_legacy_emergency_stale_RPM_is_not_integrated(self):
         self.feed()
@@ -138,7 +138,7 @@ class CompactLegacyAdapterTests(unittest.TestCase):
         self.assertEqual(self.feed(80).base_rpm, 0)
         self.assertEqual(self.feed(85).base_rpm, 5)
         self.assertEqual(self.feed(90).base_rpm, 10)
-        self.assertEqual(self.feed(80).base_rpm, 0)
+        self.assertEqual(self.feed(80).base_rpm, 5)
 
     def test_real_RPM_is_used_not_confused_with_ultrasonic_minus_one(self):
         result = self.feed(0, left=12, right=13)
@@ -166,7 +166,7 @@ class CompactLegacyAdapterTests(unittest.TestCase):
         self.assertFalse(self.adapter.await_zero_command)
         self.assertEqual(self.feed(15).stop_flags, 2)
         resumed = self.feed(20)
-        self.assertEqual((resumed.base_rpm, resumed.stop_flags), (10, 0))
+        self.assertEqual((resumed.base_rpm, resumed.stop_flags), (5, 0))
         self.assertTrue(any(e == "legacy_stop_standstill_observed" for e, _ in self.events))
         self.assertFalse(any(e == "legacy_stop_acknowledged" for e, _ in self.events))
 
@@ -242,7 +242,7 @@ class LegacyCoreTests(unittest.TestCase):
         self.assertEqual(self.feed(10), (0, 0))
         self.feed(15)
         self.assertEqual(self.core.state, "RUNNING")
-        self.assertEqual(self.core.status.base_rpm, 10)
+        self.assertEqual(self.core.status.base_rpm, 5)
 
     def test_blocked_UP_is_consumed_not_used_when_space_later_clears(self):
         self.feed(5)
