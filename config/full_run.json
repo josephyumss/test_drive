@@ -4,7 +4,7 @@
   "encoder_counts_per_output_rev": 40000,
   "robot_width_m": 0.85,
   "robot_length_m": 0.85,
-  "side_safety_margin_m": 0.10,
+  "side_safety_margin_m": 0.20,
   "entry_front_margin_m": 0.20,
   "rear_safety_margin_m": 0.15,
   "side_sensor_x_m": 0.0,

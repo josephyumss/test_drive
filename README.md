@@ -2,7 +2,7 @@
 git pull --ff-only origin main
 sudo bash scripts/start_full_run.sh
 
-
+sudo tail -n 120 ~/Projects/test_drive/logs/full_run/latest/controller.log
 
 수동 실행 전용 (systemd 자동 실행 사용 안 함)
 
