@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# ROS 2's generated setup files intentionally probe variables that may not
+# exist yet, so nounset (-u) cannot remain enabled while they are sourced.
+set -eo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
