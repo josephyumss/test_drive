@@ -258,6 +258,8 @@ def main(arguments=None):
         last_handshake = -math.inf
         last_snapshot = -math.inf
         last_uart_health = -math.inf
+        last_readiness_reasons = None
+        last_readiness_notice = -math.inf
         last_command_s = time.monotonic()
         recorder.emit("handshake", session=core.session,
                       mcu_protocol=args.mcu_protocol,
@@ -344,6 +346,22 @@ def main(arguments=None):
                     core.fault(f"user_stop_request_IO_or_format:{exc}")
                     recorder.emit("exception", context="user_stop_request", error=str(exc))
             command = core.tick(now)
+            if core.state == "STARTUP":
+                readiness_reasons = list(core.health_errors(now))
+                if not readiness_reasons:
+                    blocker = core.blocking_reason(resume=True)
+                    if blocker:
+                        readiness_reasons.append(blocker)
+                    if core.status and core.status.base_rpm != 0:
+                        readiness_reasons.append("startup_nonzero_speed")
+                    if core.status and core.status.stop_flags:
+                        readiness_reasons.append("startup_stop_flag_active")
+                readiness_key = tuple(readiness_reasons)
+                if (readiness_key and
+                        (readiness_key != last_readiness_reasons or now - last_readiness_notice >= 10.0)):
+                    recorder.emit("readiness_blocked", reasons=readiness_reasons)
+                    last_readiness_reasons = readiness_key
+                    last_readiness_notice = now
             # Preflight can never issue a nonzero command, even if UP is pressed.
             if args.preflight_only:
                 command = (0, 0)

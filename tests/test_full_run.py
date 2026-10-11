@@ -79,7 +79,7 @@ class FullRunTests(unittest.TestCase):
         self.assertAlmostEqual(self.config.rear_clearance_m, 0.575)
         self.assertEqual(self.config.robot_width_m, 0.85)
         self.assertEqual(self.config.side_safety_margin_m, 0.20)
-        self.assertEqual(self.config.entry_front_margin_m, 0.50)
+        self.assertEqual(self.config.entry_front_margin_m, 1.00)
         self.assertEqual(self.config.side_stop_m, 0.20)
         self.assertEqual(self.config.side_resume_m, 0.24)
         self.assertEqual(self.config.maximum_rpm, 75)
@@ -627,12 +627,30 @@ class ProtocolAndLogTests(unittest.TestCase):
             recorder = FlightRecorder(folder)
             recorder.emit("startup_step", stage="open_command_UART")
             recorder.emit("state", before="STARTUP", after="READY", reason="fresh_feeds_wait_new_UP")
+            recorder.emit("up", count=1, base_rpm=10)
+            recorder.emit("down", count=1, base_rpm=5)
+            recorder.emit("legacy_startup_button_consumed", direction="UP", base_delta=5)
+            recorder.emit("legacy_stop_UP_consumed", base_delta=5)
+            recorder.emit("resume_denied", reason="front_clearance")
+            recorder.emit("readiness_blocked", reasons=["front_clearance"])
+            for phase in ("STOPPING", "ENTRY", "BASELINE", "PASS", "REAR_CLEARANCE", "RETURN", "DRIVE"):
+                recorder.emit("phase", before="previous", after=phase)
+            recorder.emit("runtime_health", state="READY", large_payload="must stay in JSONL only")
             recorder.close()
 
         console = output.getvalue()
         self.assertIn("[STARTUP] open_command_UART", console)
         self.assertIn("[STATE] STARTUP -> READY: fresh_feeds_wait_new_UP", console)
-        self.assertIn("[READY] Sensors and STM32 are live", console)
+        self.assertIn("[READY] 준비 완료", console)
+        self.assertIn("[BUTTON] UP 감지: 설정 속도 10 RPM", console)
+        self.assertIn("[BUTTON] DOWN 감지: 설정 속도 5 RPM", console)
+        self.assertIn("[BUTTON] UP 감지했지만 READY 전 입력이라 무시", console)
+        self.assertIn("[BUTTON] UP 감지했지만 정지 확인 중이라 무시", console)
+        self.assertIn("[START BLOCKED] 출발/재출발 불가: 전방 안전거리 부족", console)
+        self.assertIn("[WAIT READY] 준비되지 않은 원인: 전방 안전거리 부족", console)
+        for phase in ("STOPPING", "ENTRY", "BASELINE", "PASS", "REAR_CLEARANCE", "RETURN", "DRIVE"):
+            self.assertIn(f"[AVOID] {phase}:", console)
+        self.assertNotIn("must stay in JSONL only", console)
 
 
 if __name__ == "__main__":
