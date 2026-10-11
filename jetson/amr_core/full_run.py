@@ -86,6 +86,10 @@ class FullRunConfig:
     turn_deceleration_rpm_s: float = 25.0
     avoidance_handle_ratio: float = 0.30
     avoidance_heading_limit_deg: float = 80.0
+    dynamic_entry_heading_deg: float = 35.0
+    dynamic_reaction_time_s: float = 0.15
+    dynamic_curve_buffer_m: float = 0.10
+    dynamic_max_trigger_distance_m: float = 4.0
     lookahead_m: float = 0.25
     path_completion_m: float = 0.08
     sensor_timeout_s: float = 1.0
@@ -132,7 +136,7 @@ class FullRunConfig:
         signed = {"side_sensor_x_m", "lidar_x_m", "lidar_y_m", "lidar_yaw_deg",
                   "camera_lidar_yaw_offset_deg"}
         zero_allowed = {"side_safety_margin_m", "rear_safety_margin_m",
-                        "lidar_self_filter_margin_m"}
+                        "lidar_self_filter_margin_m", "dynamic_curve_buffer_m"}
         for key, value in asdict(self).items():
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
                 raise ValueError(f"{key}: finite numeric value required")
@@ -151,6 +155,10 @@ class FullRunConfig:
             raise ValueError("avoidance_handle_ratio must be within 0.1..0.5")
         if not 10 <= self.avoidance_heading_limit_deg < 90:
             raise ValueError("avoidance_heading_limit_deg must be within 10..90")
+        if not 10 <= self.dynamic_entry_heading_deg < 90:
+            raise ValueError("dynamic_entry_heading_deg must be within 10..90")
+        if self.dynamic_max_trigger_distance_m < self.trigger_distance_m:
+            raise ValueError("dynamic max trigger distance must cover the normal trigger distance")
         if self.minimum_trigger_distance_m > self.trigger_distance_m:
             raise ValueError("minimum trigger distance exceeds maximum trigger distance")
         if len({self.left_trig, self.left_echo, self.right_trig, self.right_echo}) != 4:
@@ -236,12 +244,16 @@ class FullRunPathFollower(BezierPathFollower):
 
 
 class FullRunController:
-    def __init__(self, config: FullRunConfig, session: int, now: float, emit=None, *, mcu_protocol="ctrl"):
+    def __init__(self, config: FullRunConfig, session: int, now: float, emit=None, *,
+                 mcu_protocol="ctrl", avoidance_mode="fixed"):
         config.validate()
         if mcu_protocol not in ("legacy", "ctrl"):
             raise ValueError("mcu_protocol must be legacy or ctrl")
+        if avoidance_mode not in ("fixed", "dynamic"):
+            raise ValueError("avoidance_mode must be fixed or dynamic")
         self.c = config
         self.mcu_protocol = mcu_protocol
+        self.avoidance_mode = avoidance_mode
         self.session = session
         self.emit = emit or (lambda *_args, **_kwargs: None)
         self.state = "STARTUP"
@@ -496,6 +508,84 @@ class FullRunController:
         return (self.c.minimum_trigger_distance_m
                 + ratio * (self.c.trigger_distance_m - self.c.minimum_trigger_distance_m))
 
+    def entry_lateral_offset_m(self, target, side):
+        return passing_lateral_offset_m(target, turn_left=side == "left",
+                                        corridor_half_width_m=self.fusion.corridor_half_width_m)
+
+    def ordered_entry_options(self, target):
+        preferred = "right" if target.bearing_rad > 0 else "left"
+        if abs(target.bearing_rad) < math.radians(3):
+            preferred = max(("left", "right"), key=self.lateral_clearance)
+        options = [side for side in (preferred, "left" if preferred == "right" else "right")
+                   if self.entry_clear(side)]
+        if self.avoidance_mode == "dynamic":
+            # The dynamic planner chooses the clear side needing the least
+            # centre-line displacement. Stable sorting preserves the old
+            # preferred side when both routes are effectively equal.
+            options.sort(key=lambda side: abs(self.entry_lateral_offset_m(target, side)))
+        return options
+
+    def peak_entry_heading_deg(self, forward_m, lateral_m):
+        path = CubicBezierPath.from_poses(start_x_m=0.0, start_y_m=0.0,
+                                         start_yaw_rad=0.0, goal_x_m=forward_m,
+                                         goal_y_m=lateral_m, goal_yaw_rad=0.0,
+                                         handle_ratio=self.c.avoidance_handle_ratio)
+        peak = 0.0
+        for index in range(121):
+            tangent_x, tangent_y = path.tangent(index / 120)
+            if tangent_x <= 0:
+                return 180.0
+            peak = max(peak, abs(math.degrees(math.atan2(tangent_y, tangent_x))))
+        return peak
+
+    def minimum_dynamic_entry_forward_m(self, lateral_m):
+        limit = min(self.c.dynamic_entry_heading_deg, self.c.avoidance_heading_limit_deg)
+        low = self.c.minimum_entry_forward_m
+        if self.peak_entry_heading_deg(low, lateral_m) <= limit:
+            return low
+        high = max(0.50, low * 2)
+        while high < 12.0 and self.peak_entry_heading_deg(high, lateral_m) > limit:
+            high *= 1.5
+        if self.peak_entry_heading_deg(high, lateral_m) > limit:
+            return math.inf
+        for _ in range(32):
+            middle = 0.5 * (low + high)
+            if self.peak_entry_heading_deg(middle, lateral_m) <= limit:
+                high = middle
+            else:
+                low = middle
+        return high
+
+    def dynamic_trigger_plan(self, target):
+        options = self.ordered_entry_options(target)
+        if not options:
+            options = ["left", "right"]
+        side = min(options, key=lambda item: abs(self.entry_lateral_offset_m(target, item)))
+        lateral = self.entry_lateral_offset_m(target, side)
+        forward = self.minimum_dynamic_entry_forward_m(lateral)
+        speed_rpm = self.current_speed_rpm()
+        stop_time = speed_rpm / self.c.deceleration_rpm_s
+        speed_mps = math.pi * self.c.wheel_diameter_m * speed_rpm / 60.0
+        braking = 0.5 * speed_mps * stop_time
+        reaction = speed_mps * self.c.dynamic_reaction_time_s
+        required = (self.c.robot_length_m / 2 + self.c.entry_front_margin_m
+                    + forward + braking + reaction + self.c.dynamic_curve_buffer_m)
+        normal = self.current_trigger_distance_m()
+        trigger = min(self.c.dynamic_max_trigger_distance_m, max(normal, required))
+        return {"side": side, "obstacle_width_m": target.lateral_max_m - target.lateral_min_m,
+                "lateral_m": lateral, "minimum_entry_forward_m": forward,
+                "braking_distance_m": braking, "reaction_distance_m": reaction,
+                "curve_buffer_m": self.c.dynamic_curve_buffer_m,
+                "required_trigger_distance_m": required, "trigger_distance_m": trigger,
+                "trigger_capped": required > self.c.dynamic_max_trigger_distance_m,
+                "target_heading_limit_deg": min(self.c.dynamic_entry_heading_deg,
+                                                  self.c.avoidance_heading_limit_deg)}
+
+    def target_trigger_distance_m(self, target):
+        if self.avoidance_mode == "dynamic":
+            return self.dynamic_trigger_plan(target)["trigger_distance_m"]
+        return self.current_trigger_distance_m()
+
     def freeze_target(self, target):
         self.target = target
         self.target_world = local_point_to_world(origin_x_m=self.odom.x_m,
@@ -503,15 +593,17 @@ class FullRunController:
                                                 origin_yaw_rad=self.odom.yaw_rad,
                                                 forward_m=target.forward_distance_m,
                                                 lateral_m=target.distance_m * math.sin(target.bearing_rad))
+        plan = self.dynamic_trigger_plan(target) if self.avoidance_mode == "dynamic" else None
         self.emit("frozen_obstacle", target=asdict(target), world=self.target_world,
+                  avoidance_mode=self.avoidance_mode, dynamic_plan=plan,
                   speed_rpm=self.current_speed_rpm(),
-                  trigger_distance_m=self.current_trigger_distance_m())
+                  trigger_distance_m=self.target_trigger_distance_m(target))
         self.set_phase("STOPPING")
 
     def new_target(self):
         candidates = []
-        trigger_distance = self.current_trigger_distance_m()
         for target in self.objects:
+            trigger_distance = self.target_trigger_distance_m(target)
             if not target.intersects_corridor or target.forward_distance_m > trigger_distance:
                 continue
             world = local_point_to_world(origin_x_m=self.odom.x_m, origin_y_m=self.odom.y_m,
@@ -543,12 +635,13 @@ class FullRunController:
                                            completion_heading_tolerance_rad=math.radians(3))
         self.emit("path", phase=self.phase, control_points=asdict(path))
 
-    def entry_path_is_safe(self, x, y):
+    def entry_path_is_safe(self, x, y, heading_limit_deg=None):
         path = CubicBezierPath.from_poses(start_x_m=self.odom.x_m, start_y_m=self.odom.y_m,
                                          start_yaw_rad=self.odom.yaw_rad, goal_x_m=x,
                                          goal_y_m=y, goal_yaw_rad=0.0,
                                          handle_ratio=self.c.avoidance_handle_ratio)
-        limit = math.radians(self.c.avoidance_heading_limit_deg)
+        limit = math.radians(self.c.avoidance_heading_limit_deg if heading_limit_deg is None
+                             else heading_limit_deg)
         for index in range(121):
             tangent_x, tangent_y = path.tangent(index / 120)
             if tangent_x <= 0 or abs(math.atan2(tangent_y, tangent_x)) >= limit:
@@ -556,10 +649,7 @@ class FullRunController:
         return True
 
     def choose_entry(self):
-        preferred = "right" if self.target.bearing_rad > 0 else "left"
-        if abs(self.target.bearing_rad) < math.radians(3):
-            preferred = max(("left", "right"), key=self.lateral_clearance)
-        options = [s for s in (preferred, "left" if preferred == "right" else "right") if self.entry_clear(s)]
+        options = self.ordered_entry_options(self.target)
         if not options:
             self.set_phase("WAIT_DIRECTION")
             self.pause("no_entry_direction")
@@ -572,15 +662,20 @@ class FullRunController:
             self.pause("insufficient_entry_forward_room")
             return
         self.turn_left = options[0] == "left"
-        lateral = passing_lateral_offset_m(self.target, turn_left=self.turn_left,
-                                           corridor_half_width_m=self.fusion.corridor_half_width_m)
+        lateral = self.entry_lateral_offset_m(self.target, options[0])
         x, y = local_point_to_world(origin_x_m=self.odom.x_m, origin_y_m=self.odom.y_m,
                                     origin_yaw_rad=self.odom.yaw_rad, forward_m=forward, lateral_m=lateral)
-        if not self.entry_path_is_safe(x, y):
+        heading_limit = (min(self.c.dynamic_entry_heading_deg, self.c.avoidance_heading_limit_deg)
+                         if self.avoidance_mode == "dynamic" else self.c.avoidance_heading_limit_deg)
+        if not self.entry_path_is_safe(x, y, heading_limit):
             self.emit("entry_path_rejected", forward_m=forward, lateral_m=lateral,
-                      heading_limit_deg=self.c.avoidance_heading_limit_deg)
+                      avoidance_mode=self.avoidance_mode, heading_limit_deg=heading_limit)
             self.pause("entry_path_too_tight")
             return
+        if self.avoidance_mode == "dynamic":
+            self.emit("dynamic_avoidance_plan", **self.dynamic_trigger_plan(self.target),
+                      actual_entry_forward_m=forward,
+                      actual_peak_heading_deg=self.peak_entry_heading_deg(forward, lateral))
         self.lane_y = y
         self.baseline = []
         self.baseline_value = None
@@ -818,6 +913,7 @@ class FullRunController:
         nearest = min(corridor, default=None, key=lambda point: point[0])
         return {"state": self.state, "phase": self.phase, "reason": self.reason,
                 "mcu_protocol": self.mcu_protocol,
+                "avoidance_mode": self.avoidance_mode,
                 "odometry_source": "encoder_counts" if self.status and self.status.left_counts is not None else "reported_RPM_integral",
                 "pose": self.pose(), "command": self.command, "ramp": self.ramped,
                 "status": asdict(self.status) if self.status else None,

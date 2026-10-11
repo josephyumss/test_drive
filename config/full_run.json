@@ -4,8 +4,8 @@
   "encoder_counts_per_output_rev": 40000,  // 출력축 1회전 엔코더 카운트; 실제 사양과 다르면 주행거리 오차 발생
   "robot_width_m": 0.85,                   // 로봇 전체 폭(m); 키우면 측면 우회 폭 증가
   "robot_length_m": 0.85,                  // 로봇 전체 길이(m); 키우면 전후 충돌 판정 범위 증가
-  "side_safety_margin_m": 0.20,            // 차체와 장애물 측면 여유(m); 키우면 더 멀리 우회
-  "entry_front_margin_m": 0.3,            // 장애물 앞 회피 진입 여유(m); 키우면 더 일찍 옆으로 정렬
+  "side_safety_margin_m": 0.10,            // 차체와 장애물 측면 여유(m); 키우면 더 멀리 우회
+  "entry_front_margin_m": 0.1,            // 장애물 앞 회피 진입 여유(m); 키우면 더 일찍 옆으로 정렬
   "rear_safety_margin_m": 0.15,            // 장애물 후단 통과 추가 여유(m); 키우면 더 지나간 뒤 복귀
   "side_sensor_x_m": 0.0,                  // 차체 중심 기준 측면센서 전후 위치(m); +는 전방
   "side_sensor_y_m": 0.25,                 // 차체 중심 기준 측면센서 좌우 거리(m); 키우면 센서가 차체 끝에 가까움
@@ -30,6 +30,10 @@
   "turn_deceleration_rpm_s": 25.0,         // 회피 회전 감속률(RPM/s); 키우면 회전 종료가 급해짐
   "avoidance_handle_ratio": 0.40,          // 회피 곡선 제어점 비율; 키우면 곡선이 길고 완만해짐
   "avoidance_heading_limit_deg": 80.0,     // 회피 중 허용 최대 방향각(도); 키우면 더 크게 꺾을 수 있음
+  "dynamic_entry_heading_deg": 60.0,       // 동적 회피 목표 최대 진입각(도); 줄이면 더 일찍 완만하게 회피
+  "dynamic_reaction_time_s": 0.15,         // 동적 회피 감지·제어 지연 여유(s); 키우면 더 일찍 회피
+  "dynamic_curve_buffer_m": 0.10,          // 계산 오차·센서 지연용 추가 전방 여유(m)
+  "dynamic_max_trigger_distance_m": 4.0,   // 동적 회피 시작거리 상한(m); 넓은 장애물 조기 진입 한계
   "lookahead_m": 0.25,                     // 곡선 추종 전방주시 거리(m); 키우면 완만, 줄이면 민감
   "path_completion_m": 0.08,               // 경로 도착 인정 거리(m); 키우면 더 일찍 다음 단계 진입
   "sensor_timeout_s": 1.0,                 // 카메라·LiDAR 무응답 허용시간(s); 키우면 일시 지연에 관대

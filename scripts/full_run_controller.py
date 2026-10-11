@@ -148,6 +148,8 @@ def main(arguments=None):
     parser.add_argument("--baudrate", type=int, default=115200)
     parser.add_argument("--mcu-protocol", choices=("legacy", "ctrl"), default="legacy",
                         help="Default legacy uses existing $CMD/$STATUS; no firmware update")
+    parser.add_argument("--avoidance-mode", choices=("fixed", "dynamic"), default="fixed",
+                        help="fixed preserves the existing planner; dynamic derives entry timing from obstacle width and speed")
     parser.add_argument("--side-sensor-source", choices=("mcu", "gpio"), default="mcu",
                         help="Default mcu: side centimetres in confirmed compact STATUS; gpio only for Jetson-wired sensors")
     parser.add_argument("--no-command-status-fallback", action="store_true",
@@ -164,6 +166,7 @@ def main(arguments=None):
     config = FullRunConfig.read(args.config)
     if args.check_config:
         print(json.dumps({"configuration": asdict(config), "mcu_protocol": args.mcu_protocol,
+                          "avoidance_mode": args.avoidance_mode,
                           "side_sensor_source": args.side_sensor_source,
                           "expected_side_range_m": config.expected_side_range_m,
                           "rear_clearance_m": config.rear_clearance_m}, indent=2))
@@ -171,12 +174,13 @@ def main(arguments=None):
     recorder = FlightRecorder(args.log_dir, config.log_max_bytes, config.log_backup_count)
     recorder.emit("configuration", config=asdict(config), port=args.port, status_port=args.status_port,
                   mcu_protocol=args.mcu_protocol,
+                  avoidance_mode=args.avoidance_mode,
                   side_sensor_source=args.side_sensor_source,
                   command_status_fallback=not args.no_command_status_fallback,
                   argv=sys.argv, python=sys.version, expected_side_range_m=config.expected_side_range_m,
                   rear_clearance_m=config.rear_clearance_m)
     core = FullRunController(config, secrets.randbelow(0x7ffffffe) + 1, time.monotonic(), recorder.emit,
-                             mcu_protocol=args.mcu_protocol)
+                             mcu_protocol=args.mcu_protocol, avoidance_mode=args.avoidance_mode)
     legacy = LegacyControlAdapter(core.session, config.maximum_rpm, recorder.emit) if args.mcu_protocol == "legacy" else None
     command_uart = status_uart = worker = node = receiver = None
     ros_initialized = False

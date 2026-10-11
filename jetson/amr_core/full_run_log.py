@@ -140,6 +140,12 @@ class FlightRecorder:
             print(f"[AVOID] 장애물 확정: {target.get('label', 'object')}, "
                   f"전방 {target.get('forward_distance_m', '?')}m", flush=True)
             return
+        if event == "dynamic_avoidance_plan":
+            print(f"[AVOID PLAN] 동적 회피: 폭 {data.get('obstacle_width_m', '?')}m, "
+                  f"{data.get('side', '?')} 방향, 측면이동 {data.get('lateral_m', '?')}m, "
+                  f"진입 전진거리 {data.get('actual_entry_forward_m', '?')}m, "
+                  f"최대 예상각 {data.get('actual_peak_heading_deg', '?')}도", flush=True)
+            return
         if event == "side_object_seen":
             print(f"[AVOID] {data.get('side', '?')} 측면센서로 장애물 확인", flush=True)
             return

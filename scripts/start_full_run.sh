@@ -2,21 +2,38 @@
 # Boot service and foreground/manual launcher for continuous button-controlled runs.
 set -Eeuo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-MODE="${1:-run}"
-case "$MODE" in
-    run|--check|--preflight-only) ;;
-    --stop) exec /bin/bash "$PROJECT_DIR/scripts/stop_full_run.sh" ;;
-    --instant-stop) exec /usr/bin/python3 "$PROJECT_DIR/scripts/full_run_user_stop.py" ;;
+MODE=run
+AVOIDANCE_MODE="${AVOIDANCE_MODE:-fixed}"
+while (( $# )); do
+    case "$1" in
+    --check|--preflight-only)
+        [[ "$MODE" == run ]] || { echo 'Only one run mode may be selected.' >&2; exit 2; }
+        MODE="$1"; shift ;;
+    --avoidance-mode)
+        (( $# >= 2 )) || { echo '--avoidance-mode requires fixed or dynamic.' >&2; exit 2; }
+        AVOIDANCE_MODE="$2"; shift 2 ;;
+    --avoidance-mode=*) AVOIDANCE_MODE="${1#*=}"; shift ;;
+    --stop)
+        (( $# == 1 )) || { echo '--stop cannot be combined with other options.' >&2; exit 2; }
+        exec /bin/bash "$PROJECT_DIR/scripts/stop_full_run.sh" ;;
+    --instant-stop)
+        (( $# == 1 )) || { echo '--instant-stop cannot be combined with other options.' >&2; exit 2; }
+        exec /usr/bin/python3 "$PROJECT_DIR/scripts/full_run_user_stop.py" ;;
     -h|--help)
-        echo 'Usage: sudo bash scripts/start_full_run.sh [--check|--preflight-only|--instant-stop|--stop]'
+        echo 'Usage: sudo bash scripts/start_full_run.sh [--avoidance-mode fixed|dynamic] [--check|--preflight-only]'
+        echo '       sudo bash scripts/start_full_run.sh [--instant-stop|--stop]'
         echo 'Existing STM32 firmware is used by default (MCU_PROTOCOL=legacy).'
+        echo 'fixed keeps the existing avoidance planner; dynamic uses obstacle width and speed.'
         echo '--instant-stop pauses the live run; UP resumes the saved manoeuvre.'
         echo 'Starts in READY at zero RPM. A new physical UP press starts motion.'
         echo 'Ctrl+C/SIGTERM stops motors and owned processes. Restart manually with the same command.'
         exit 0 ;;
-    *) echo "Unknown option: $MODE" >&2; exit 2 ;;
-esac
-(( $# <= 1 )) || { echo 'Too many arguments' >&2; exit 2; }
+    *) echo "Unknown option: $1" >&2; exit 2 ;;
+    esac
+done
+[[ "$AVOIDANCE_MODE" == fixed || "$AVOIDANCE_MODE" == dynamic ]] || {
+    echo '[FAIL] --avoidance-mode must be fixed or dynamic.' >&2; exit 2;
+}
 [[ "$(uname -s)" == Linux ]] || { echo '[FAIL] This launcher runs on the Linux Jetson.' >&2; exit 1; }
 
 RUN_DIR="$PROJECT_DIR/.run"
@@ -130,7 +147,8 @@ done
 set -u
 if command -v "$PYTHON_BIN" >/dev/null 2>&1; then
     "$PYTHON_BIN" "$PROJECT_DIR/scripts/full_run_controller.py" --config "$FULL_RUN_CONFIG" --log-dir "$LOG_DIR" \
-        --mcu-protocol "$MCU_PROTOCOL" --side-sensor-source "$SIDE_SENSOR_SOURCE" --check-config \
+        --mcu-protocol "$MCU_PROTOCOL" --side-sensor-source "$SIDE_SENSOR_SOURCE" \
+        --avoidance-mode "$AVOIDANCE_MODE" --check-config \
         || check_fail 'Full-run configuration validation failed'
     "$PYTHON_BIN" "$PROJECT_DIR/scripts/full_run_requirements.py" > "$LOG_DIR/imports.json" 2> "$LOG_DIR/imports.log" \
         || check_fail 'Python/ROS/GPIO imports or installed-source identity failed; see imports.json and imports.log'
@@ -145,7 +163,7 @@ if command -v docker >/dev/null 2>&1; then
 fi
 [[ "$MCU_PROTOCOL" == legacy || "$MCU_PROTOCOL" == ctrl ]] || check_fail 'MCU_PROTOCOL must be legacy or ctrl'
 (( check_errors == 0 )) || fail "$check_errors independent startup checks failed. No robot processes were started."
-echo "[INFO] command=$MCU_DEVICE status=$MCU_STATUS_DEVICE command_RX_fallback=$MCU_STATUS_COMMAND_FALLBACK side_sensors=$SIDE_SENSOR_SOURCE lidar=$LIDAR_DEVICE mode=$MODE protocol=$MCU_PROTOCOL"
+echo "[INFO] command=$MCU_DEVICE status=$MCU_STATUS_DEVICE command_RX_fallback=$MCU_STATUS_COMMAND_FALLBACK side_sensors=$SIDE_SENSOR_SOURCE lidar=$LIDAR_DEVICE mode=$MODE protocol=$MCU_PROTOCOL avoidance=$AVOIDANCE_MODE"
 echo '[INFO] Default legacy uses existing $CMD/$STATUS, without a firmware update. Live status RX is required; no open-loop fallback.'
 [[ "$MODE" != --check ]] || { echo '[CHECK] Installation/configuration passed; live sensors and firmware not checked.'; exit 0; }
 
@@ -372,7 +390,8 @@ printf '%s %s\n' "$$" "$launcher_start_ticks" > "$RUN_DIR/full_run.pid"
 # Start the zero-RPM controller before sensor warmup. It owns the only actuator
 # UART and keeps the STM32 heartbeat alive during YOLO initialization.
 args=(--config "$FULL_RUN_CONFIG" --port "$MCU_DEVICE" --status-port "$MCU_STATUS_DEVICE" \
-      --baudrate "$MCU_BAUDRATE" --mcu-protocol "$MCU_PROTOCOL" --side-sensor-source "$SIDE_SENSOR_SOURCE" --log-dir "$LOG_DIR" --supervisor-pid "$$" \
+      --baudrate "$MCU_BAUDRATE" --mcu-protocol "$MCU_PROTOCOL" --side-sensor-source "$SIDE_SENSOR_SOURCE" \
+      --avoidance-mode "$AVOIDANCE_MODE" --log-dir "$LOG_DIR" --supervisor-pid "$$" \
       --user-stop-file "$RUN_DIR/full_run.user_stop.json" \
       --supervisor-start-ticks "$launcher_start_ticks")
 [[ "$MODE" != --preflight-only ]] || args+=(--preflight-only)

@@ -90,10 +90,13 @@ class FullRunTests(unittest.TestCase):
         self.assertEqual(self.config.deceleration_rpm_s, 75.0)
         self.assertEqual(self.config.turn_acceleration_rpm_s, 15.0)
         self.assertEqual(self.config.turn_deceleration_rpm_s, 25.0)
-        self.assertEqual(self.config.avoidance_handle_ratio, 0.30)
-        self.assertEqual(self.config.minimum_trigger_distance_m, 2.0)
+        self.assertEqual(self.config.avoidance_handle_ratio, 0.40)
+        self.assertEqual(self.config.minimum_trigger_distance_m, 3.0)
         self.assertEqual(self.config.trigger_distance_m, 3.0)
-        self.assertEqual(self.config.avoidance_heading_limit_deg, 50.0)
+        self.assertEqual(self.config.avoidance_heading_limit_deg, 80.0)
+        self.assertEqual(self.config.dynamic_entry_heading_deg, 35.0)
+        self.assertEqual(self.config.dynamic_curve_buffer_m, 0.10)
+        self.assertEqual(self.config.dynamic_max_trigger_distance_m, 4.0)
         self.assertEqual(self.config.minimum_entry_forward_m, 0.30)
 
     def test_config_rejects_overlapping_thresholds_and_duplicate_pins(self):
@@ -129,20 +132,51 @@ class FullRunTests(unittest.TestCase):
         self.assertEqual(self.core.ramp_command((0, 0), 0.5), (38, 38))
         self.assertEqual(self.core.ramp_command((0, 0), 0.5), (0, 0))
 
-    def test_detection_range_scales_from_two_to_three_metres_with_speed(self):
+    def test_fixed_detection_range_stays_at_configured_three_metres(self):
         self.core.ramped = [0.0, 0.0]
-        self.assertAlmostEqual(self.core.current_trigger_distance_m(), 2.0)
+        self.assertAlmostEqual(self.core.current_trigger_distance_m(), 3.0)
         self.core.ramped = [37.5, 37.5]
-        self.assertAlmostEqual(self.core.current_trigger_distance_m(), 2.5)
+        self.assertAlmostEqual(self.core.current_trigger_distance_m(), 3.0)
         self.core.ramped = [75.0, 75.0]
         self.assertAlmostEqual(self.core.current_trigger_distance_m(), 3.0)
 
         distant = self.target(distance=2.7)
         self.core.objects = [distant]
         self.core.ramped = [0.0, 0.0]
-        self.assertIsNone(self.core.new_target())
-        self.core.ramped = [75.0, 75.0]
         self.assertEqual(self.core.new_target(), distant)
+
+    def test_dynamic_trigger_starts_earlier_for_wider_obstacle(self):
+        core = FullRunController(self.config, 123, self.now, avoidance_mode="dynamic")
+        core.points = []
+        core.ramped = [0.0, 0.0]
+        narrow = FusedObject(1, "chair", 0.9, 3, 3.5, 3.5, 0, -0.03, 0.03,
+                             -0.10, 0.10, True)
+        wide = FusedObject(2, "chair", 0.9, 3, 3.5, 3.5, 0, -0.15, 0.15,
+                           -0.50, 0.50, True)
+        narrow_plan = core.dynamic_trigger_plan(narrow)
+        wide_plan = core.dynamic_trigger_plan(wide)
+        self.assertGreater(wide_plan["minimum_entry_forward_m"],
+                           narrow_plan["minimum_entry_forward_m"])
+        self.assertGreater(wide_plan["trigger_distance_m"],
+                           narrow_plan["trigger_distance_m"])
+
+    def test_dynamic_trigger_includes_speed_dependent_stopping_distance(self):
+        core = FullRunController(self.config, 123, self.now, avoidance_mode="dynamic")
+        target = self.target(distance=3.5)
+        core.ramped = [0.0, 0.0]
+        stopped = core.dynamic_trigger_plan(target)
+        core.ramped = [75.0, 75.0]
+        moving = core.dynamic_trigger_plan(target)
+        self.assertEqual(stopped["braking_distance_m"], 0.0)
+        self.assertGreater(moving["braking_distance_m"], 0.0)
+        self.assertGreater(moving["trigger_distance_m"], stopped["trigger_distance_m"])
+
+    def test_fixed_mode_keeps_existing_speed_only_trigger(self):
+        target = FusedObject(2, "wide", 0.9, 3, 3.5, 3.5, 0, -0.2, 0.2,
+                             -0.70, 0.70, True)
+        self.core.ramped = [0.0, 0.0]
+        self.assertEqual(self.core.avoidance_mode, "fixed")
+        self.assertAlmostEqual(self.core.target_trigger_distance_m(target), 3.0)
 
     def test_phase_speed_limits_scale_with_75_rpm_drive_limit(self):
         self.start()
